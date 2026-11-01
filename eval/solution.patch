@@ -1,0 +1,199 @@
+diff --git a/app/Actions/Refunds/RefundOrderPartially.php b/app/Actions/Refunds/RefundOrderPartially.php
+new file mode 100644
+index 0000000..c095962
+--- /dev/null
++++ b/app/Actions/Refunds/RefundOrderPartially.php
+@@ -0,0 +1,71 @@
++<?php
++
++namespace App\Actions\Refunds;
++
++use App\Actions\Audit\RecordAuditEntry;
++use App\Enums\OrderStatus;
++use App\Events\OrderRefunded;
++use App\Models\Order;
++use App\Models\Refund;
++use App\Models\User;
++use App\Payments\PaymentGateway;
++use DomainException;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Facades\Gate;
++
++/**
++ * Rimborso parziale: gateway con chiave di idempotenza del client, poi scritture atomiche,
++ * poi notifica dopo il commit.
++ */
++final class RefundOrderPartially
++{
++    public function __construct(private PaymentGateway $gateway, private RecordAuditEntry $audit) {}
++
++    public function handle(Order $order, User $actor, int $amountCents, string $reason, string $idempotencyKey): Refund
++    {
++        Gate::forUser($actor)->authorize('refund', $order);
++
++        if ($existing = Refund::where('idempotency_key', $idempotencyKey)->first()) {
++            if ($existing->order_id !== $order->id) {
++                throw new DomainException('Idempotency key already used for another order.');
++            }
++
++            return $existing;
++        }
++
++        $refunded = (int) round($order->refunds()->sum('amount') * 100);
++        if ($amountCents <= 0 || $refunded + $amountCents > $order->amount) {
++            throw new DomainException('The refund exceeds the amount left on the order.');
++        }
++
++        $result = $this->gateway->refund($order->gateway_charge_id, $amountCents, "partial-refund-{$order->id}-{$idempotencyKey}");
++
++        $refund = DB::transaction(function () use ($order, $actor, $amountCents, $reason, $idempotencyKey, $result, $refunded) {
++            $refund = $order->refunds()->create([
++                'amount' => $amountCents / 100,
++                'gateway_refund_id' => $result->id,
++                'refunded_by' => $actor->id,
++                'reason' => $reason,
++                'idempotency_key' => $idempotencyKey,
++            ]);
++
++            $order->update([
++                'status' => $refunded + $amountCents === $order->amount ? OrderStatus::Refunded : OrderStatus::PartiallyRefunded,
++            ]);
++
++            $this->audit->handle($actor, 'order.refunded_partially', $order, [
++                'refund_id' => $refund->id,
++                'amount_cents' => $amountCents,
++                'reason' => $reason,
++                'idempotency_key' => $idempotencyKey,
++                'gateway_refund_id' => $result->id,
++            ]);
++
++            return $refund;
++        });
++
++        event(new OrderRefunded($order, $refund));
++
++        return $refund;
++    }
++}
+diff --git a/app/Enums/OrderStatus.php b/app/Enums/OrderStatus.php
+index cd7f23a..bd6443e 100644
+--- a/app/Enums/OrderStatus.php
++++ b/app/Enums/OrderStatus.php
+@@ -7,5 +7,6 @@ enum OrderStatus: string
+     case Pending = 'pending';
+     case Paid = 'paid';
+     case Cancelled = 'cancelled';
++    case PartiallyRefunded = 'partially_refunded';
+     case Refunded = 'refunded';
+ }
+diff --git a/app/Http/Controllers/Admin/OrderPartialRefundController.php b/app/Http/Controllers/Admin/OrderPartialRefundController.php
+new file mode 100644
+index 0000000..6506a06
+--- /dev/null
++++ b/app/Http/Controllers/Admin/OrderPartialRefundController.php
+@@ -0,0 +1,29 @@
++<?php
++
++namespace App\Http\Controllers\Admin;
++
++use App\Actions\Refunds\RefundOrderPartially;
++use App\Http\Controllers\Controller;
++use App\Models\Order;
++use DomainException;
++use Illuminate\Http\RedirectResponse;
++use Illuminate\Http\Request;
++
++class OrderPartialRefundController extends Controller
++{
++    public function store(Order $order, Request $request, RefundOrderPartially $refund): RedirectResponse
++    {
++        $data = $request->validate([
++            'amount' => ['required', 'integer', 'min:1'],
++            'reason' => ['required', 'string', 'max:255'],
++        ]);
++
++        try {
++            $refund->handle($order, $request->user(), $data['amount'], $data['reason'], $request->header('Idempotency-Key'));
++        } catch (DomainException $e) {
++            return back()->withErrors(['amount' => $e->getMessage()]);
++        }
++
++        return back()->with('status', 'Rimborso parziale registrato.');
++    }
++}
+diff --git a/app/Models/Refund.php b/app/Models/Refund.php
+index 2c6cc87..b49db40 100644
+--- a/app/Models/Refund.php
++++ b/app/Models/Refund.php
+@@ -8,7 +8,7 @@
+ use Illuminate\Database\Eloquent\Model;
+ use Illuminate\Database\Eloquent\Relations\BelongsTo;
+ 
+-#[Fillable(['order_id', 'amount', 'gateway_refund_id', 'refunded_by'])]
++#[Fillable(['order_id', 'amount', 'gateway_refund_id', 'refunded_by', 'reason', 'idempotency_key'])]
+ class Refund extends Model
+ {
+     /** @use HasFactory<RefundFactory> */
+diff --git a/app/Policies/OrderPolicy.php b/app/Policies/OrderPolicy.php
+index f5f9b55..c552782 100644
+--- a/app/Policies/OrderPolicy.php
++++ b/app/Policies/OrderPolicy.php
+@@ -22,6 +22,6 @@ public function cancel(User $user, Order $order): bool
+     public function refund(User $user, Order $order): bool
+     {
+         return in_array($user->role, [Role::Finance, Role::Admin], true)
+-            && $order->status === OrderStatus::Paid;
++            && in_array($order->status, [OrderStatus::Paid, OrderStatus::PartiallyRefunded], true);
+     }
+ }
+diff --git a/database/migrations/2026_11_14_090000_allow_partial_refunds.php b/database/migrations/2026_11_14_090000_allow_partial_refunds.php
+new file mode 100644
+index 0000000..26cc2bc
+--- /dev/null
++++ b/database/migrations/2026_11_14_090000_allow_partial_refunds.php
+@@ -0,0 +1,32 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++/**
++ * Più rimborsi per ordine: via l'indice unique su order_id, più motivo e chiave di idempotenza.
++ * refunds.amount resta in euro (Conflict noto): nessuna riga storica cambia.
++ */
++return new class extends Migration
++{
++    public function up(): void
++    {
++        Schema::table('refunds', function (Blueprint $table) {
++            $table->dropUnique(['order_id']);
++            $table->index('order_id');
++            $table->string('reason')->nullable();
++            $table->string('idempotency_key')->nullable()->unique();
++        });
++    }
++
++    public function down(): void
++    {
++        Schema::table('refunds', function (Blueprint $table) {
++            $table->dropUnique(['idempotency_key']);
++            $table->dropColumn(['reason', 'idempotency_key']);
++            $table->dropIndex(['order_id']);
++            $table->unique('order_id');
++        });
++    }
++};
+diff --git a/routes/web.php b/routes/web.php
+index c76ee57..98afe8e 100644
+--- a/routes/web.php
++++ b/routes/web.php
+@@ -14,5 +14,8 @@
+     Route::prefix('admin')->name('admin.')->group(function () {
+         Route::get('/orders/{order}', [Admin\OrderController::class, 'show'])->name('orders.show');
+         Route::post('/orders/{order}/refund', [Admin\OrderRefundController::class, 'store'])->name('orders.refund');
++        Route::post('/orders/{order}/refunds', [Admin\OrderPartialRefundController::class, 'store'])
++            ->middleware('idempotent')
++            ->name('orders.refunds.store');
+     });
+ });
