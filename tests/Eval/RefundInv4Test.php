@@ -40,7 +40,7 @@ describe('REFUND-INV-4', function () {
         $order = eval_order(5000);
         eval_fail_on('orders', 'UPDATE');
 
-        eval_refund(User::factory()->finance()->create(), $order, 1000);
+        eval_refund(User::factory()->finance()->create(), $order, 5000); // intero importo: lo stato cambia di sicuro
 
         Notification::assertNothingSent();
     });

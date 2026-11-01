@@ -22,4 +22,4 @@ cp -a <repo>/vendor . && cp -r <eval>/tests/Eval tests/ && cat <eval>/eval/pest.
 PAYMENTS_DRIVER=fake vendor/bin/pest tests/Eval   # 24/24
 ```
 
-Su `cp-00` senza modifiche la suite dà 0/7 (le asserzioni "nessun rimborso" passano da sole, i controlli positivi no).
+Su `cp-00` senza modifiche la suite dà 0/7 (le asserzioni "nessun rimborso" passano da sole, i controlli positivi no). I guasti su `orders` usano un rimborso dell'intero importo: lo stato cambia in qualunque implementazione, quindi chi tiene `paid` dopo un parziale paga solo ORDER-INV-1.

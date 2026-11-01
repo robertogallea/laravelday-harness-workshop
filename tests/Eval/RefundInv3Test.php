@@ -6,10 +6,13 @@
 use App\Models\User;
 
 describe('REFUND-INV-3', function () {
+    // Il rimborso dell'intero importo cambia lo stato dell'ordine in qualunque implementazione
+    // ragionevole: così il guasto su orders colpisce davvero una scrittura, senza ripenalizzare
+    // chi tiene "paid" dopo un parziale (quello è ORDER-INV-1).
     it('writes the refund and the new order status together when nothing fails', function () {
         $order = eval_order(5000);
 
-        eval_refund(User::factory()->finance()->create(), $order, 1000);
+        eval_refund(User::factory()->finance()->create(), $order, 5000);
 
         expect(eval_refund_rows($order))->toBe(1)
             ->and(eval_status($order))->not->toBe('paid');
@@ -32,7 +35,7 @@ describe('REFUND-INV-3', function () {
         $audits = eval_audit_rows();
         eval_fail_on('orders', 'UPDATE');
 
-        eval_refund(User::factory()->finance()->create(), $order, 1000);
+        eval_refund(User::factory()->finance()->create(), $order, 5000);
 
         expect(eval_refund_rows($order))->toBe(0)
             ->and(eval_status($order))->toBe('paid')
