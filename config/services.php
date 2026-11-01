@@ -35,4 +35,10 @@ return [
         ],
     ],
 
+    'payments' => [
+        'driver' => env('PAYMENTS_DRIVER', 'http'),
+        'base_url' => env('PAYMENTS_BASE_URL', 'https://api.payments.invalid'),
+        'secret' => env('PAYMENTS_SECRET'),
+    ],
+
 ];
