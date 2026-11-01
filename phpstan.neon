@@ -1,0 +1,22 @@
+# PHPStan con Larastan. Lo usano gli hook su un file alla volta: vendor/bin/phpstan analyse <file>
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 5
+    paths:
+        - app
+        - database
+        - tests
+    # I tipi dei docblock (gli enum dei cast) non bastano a dire che un confronto è sempre falso.
+    treatPhpDocTypesAsCertain: false
+    # Con un file solo le regole qui sotto spesso non scattano: non è un errore.
+    reportUnmatchedIgnoredErrors: false
+    ignoreErrors:
+        # Nelle closure di Pest $this è il TestCase (tests/Pest.php), non la TestCall.
+        -
+            message: '#Pest\\PendingCalls\\TestCall#'
+            path: tests/*
+        -
+            message: '#Undefined variable: \$this#'
+            path: tests/*
