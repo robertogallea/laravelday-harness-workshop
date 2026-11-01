@@ -172,7 +172,8 @@ foreach ($traps['trappole'] as $id => $t) {
         $ok = $red === [] && $baseRed === [];
         $esito = $ok ? '✅' : '❌';
         if (! $ok) {
-            $first = $red === [] ? 'Baseline rossa: '.basename($baseRed[0], '.php') : reset($red).': '.($invariants[reset($red)]['failures'][0] ?? '');
+            $first = $red === [] ? 'Baseline rossa: '.basename($baseRed[0], '.php')
+                : reset($red).': '.preg_replace('/^`?[\w-]+`?\s*→\s*(it\s+)?/u', '', $invariants[reset($red)]['failures'][0] ?? '');
             $why = W\one_line($first, 90);
         }
     } elseif ($t['controllo'] === 'migrazioni') {
