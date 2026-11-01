@@ -1,0 +1,12 @@
+{
+    "_nota": "USD per milione di token, solo per stimare il costo delle run di Codex (Claude riporta total_cost_usd). Il costo è 'equivalente a listino': con un abbonamento non si paga a token. DA VERIFICARE su https://developers.openai.com/api/docs/pricing prima del workshop: gli aggregatori riportano anche Terra a 2.50/0.25/15.00. Un modello assente dalla tabella dà costo n/d.",
+    "data": "2026-09-22",
+    "fonte": "https://flexprice.io/pricing-index/openai-api (cita la pagina dei prezzi di OpenAI)",
+    "models": {
+        "gpt-5.6-terra": {
+            "input": 2.0,
+            "cached_input": 0.2,
+            "output": 12.0
+        }
+    }
+}

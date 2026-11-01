@@ -29,3 +29,4 @@ Thumbs.db
 /.harness/state/
 /workshop/runs/
 /workshop/agent
+/dist/

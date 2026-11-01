@@ -1,0 +1,148 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * php workshop/bin/fallback 1|2 [--agent=claude|codex] [--force]
+ *     carica la run di riferimento del docente al posto della tua (run fallita, quota finita,
+ *     rete giù, timeout): branch run-<N> ed evidenze in workshop/runs/run-<N>/, così
+ *     `php workshop/bin/score run-<N>` funziona come per una run tua.
+ *     Il ref è refs/workshop/reference/<agente>-run-<N>, locale oppure scaricato da origin.
+ *     --force: se run-<N> esiste già lo rinomina (run-<N>-mia-<data>), non lo cancella.
+ *
+ * Solo per il docente, nel repo di build:
+ * php workshop/bin/fallback --save run-<N> [--name=<agente>-run-<N>]
+ *     trasforma una run registrata (branch + workshop/runs/run-<N>/) in un ref di riferimento
+ *     locale: un commit sopra run-<N> che aggiunge le evidenze in .reference/, con i path
+ *     della home sostituiti da ~. Pubblicazione: php workshop/bin/release reference <nome>.
+ */
+
+require dirname(__DIR__, 2).'/.harness/lib/workshop.php';
+
+use Workshop as W;
+
+const EVIDENZE = '.reference';
+
+$root = W\root();
+[$args, $opts] = W\parse_args($argv);
+
+try {
+    if (isset($opts['save'])) {
+        save($root, $args[0] ?? '', is_string($opts['name'] ?? null) ? $opts['name'] : null);
+    } else {
+        load($root, $args[0] ?? '', $opts);
+    }
+} catch (RuntimeException $e) {
+    fwrite(STDERR, 'fallback: '.$e->getMessage().PHP_EOL);
+    exit(1);
+}
+
+function sh(string $root, array $cmd, ?array $env = null): string
+{
+    echo '  $ ', W\show_cmd($cmd), PHP_EOL;
+    $r = W\run($cmd, $root, 300, null, $env);
+    if ($r['exit'] !== 0) {
+        throw new RuntimeException(W\show_cmd($cmd).': '.trim($r['err']."\n".$r['out']));
+    }
+
+    return rtrim($r['out'], "\n");
+}
+
+function load(string $root, string $n, array $opts): void
+{
+    if (! in_array($n, ['1', '2'], true)) {
+        throw new RuntimeException('Uso: php workshop/bin/fallback 1|2 [--agent=claude|codex] [--force]');
+    }
+    $agent = W\default_agent($root, $opts);
+    $name = "{$agent}-run-{$n}";
+    $ref = "refs/workshop/reference/{$name}";
+    $sha = W\git_out($root, 'rev-parse', '--verify', '--quiet', "{$ref}^{commit}");
+    if ($sha === null) {
+        echo "\$ git fetch origin {$ref}", PHP_EOL;
+        $f = W\git($root, 'fetch', '-q', '--no-tags', 'origin', $ref);
+        if ($f['exit'] !== 0) {
+            throw new RuntimeException("run di riferimento {$name} non trovata (né in locale né su origin): ".trim($f['err']));
+        }
+        $sha = W\git_out($root, 'rev-parse', 'FETCH_HEAD^{commit}');
+    }
+    if (W\git($root, 'cat-file', '-e', "{$sha}:".EVIDENZE.'/manifest.json')['exit'] !== 0) {
+        throw new RuntimeException("{$name} non contiene le evidenze (".EVIDENZE.'/manifest.json)');
+    }
+
+    $branch = "run-{$n}";
+    $out = "{$root}/workshop/runs/{$branch}";
+    if (W\git_out($root, 'rev-parse', '--verify', '--quiet', "refs/heads/{$branch}") !== null || is_dir($out)) {
+        if (! isset($opts['force'])) {
+            throw new RuntimeException("{$branch} c'è già (la tua run). Per sostituirla con quella di riferimento: --force (la tua resta con un altro nome)");
+        }
+        $mine = "{$branch}-mia-".date('Ymd-His');
+        if (W\git_out($root, 'rev-parse', '--verify', '--quiet', "refs/heads/{$branch}") !== null) {
+            sh($root, ['git', 'branch', '-m', $branch, $mine]);
+        }
+        if (is_dir($out)) {
+            rename($out, dirname($out)."/{$mine}");
+        }
+        echo "  …     la tua {$branch} ora si chiama {$mine}", PHP_EOL;
+    }
+
+    sh($root, ['git', 'branch', $branch, "{$sha}^"]);
+    $tmp = sys_get_temp_dir().'/reference-'.bin2hex(random_bytes(3));
+    try {
+        W\extract_tree($root, "{$sha}:".EVIDENZE, $tmp);
+        @mkdir(dirname($out), 0777, true);
+        W\copy_dir($tmp, $out);
+    } finally {
+        W\remove_dir($tmp);
+    }
+    $manifest = json_decode((string) file_get_contents("{$out}/manifest.json"), true);
+    echo "{$branch} = run di riferimento {$name} (", $manifest['agent'] ?? '?', ' / ', $manifest['model'] ?? '?', ', ', substr((string) ($manifest['started_at'] ?? ''), 0, 10), ').', PHP_EOL;
+    echo "Valutazione: php workshop/bin/score {$branch}", PHP_EOL;
+}
+
+function save(string $root, string $branch, ?string $name): void
+{
+    if (! preg_match('/^run-([12])$/', $branch, $m)) {
+        throw new RuntimeException('Uso: php workshop/bin/fallback --save run-1|run-2 [--name=<agente>-run-<N>]');
+    }
+    $dir = "{$root}/workshop/runs/{$branch}";
+    $manifest = json_decode((string) @file_get_contents("{$dir}/manifest.json"), true);
+    $sha = W\git_out($root, 'rev-parse', '--verify', '--quiet', "refs/heads/{$branch}");
+    if ($sha === null || ! is_array($manifest)) {
+        throw new RuntimeException("servono il branch {$branch} e workshop/runs/{$branch}/manifest.json");
+    }
+    $name ??= ($manifest['agent'] ?? 'agente')."-run-{$m[1]}";
+    if (! preg_match('/^[\w.-]+$/', $name)) {
+        throw new RuntimeException("nome non valido: {$name}");
+    }
+
+    $home = W\home_dir();
+    $index = tempnam(sys_get_temp_dir(), 'idx');
+    $env = ['GIT_INDEX_FILE' => $index];
+    try {
+        sh($root, ['git', 'read-tree', $sha], $env);
+        $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS));
+        $files = 0;
+        foreach ($it as $f) {
+            if (! $f->isFile() || $f->getFilename() === 'score.json') {
+                continue; // lo score si ricalcola con la suite pubblicata
+            }
+            $rel = substr($f->getPathname(), strlen($dir) + 1);
+            $content = (string) file_get_contents($f->getPathname());
+            if ($home !== '' && ! str_ends_with($rel, '.sqlite')) {
+                $content = str_replace([$home.'/', $home], ['~/', '~'], $content);
+            }
+            $tmp = tempnam(sys_get_temp_dir(), 'ev');
+            file_put_contents($tmp, $content);
+            $blob = sh($root, ['git', 'hash-object', '-w', $tmp]);
+            @unlink($tmp);
+            sh($root, ['git', 'update-index', '--add', '--cacheinfo', "100644,{$blob},".EVIDENZE."/{$rel}"], $env);
+            $files++;
+        }
+        $tree = sh($root, ['git', 'write-tree'], $env);
+        $commit = sh($root, ['git', '-c', 'commit.gpgsign=false', 'commit-tree', $tree, '-p', $sha, '-m', "Run di riferimento {$name}: evidenze"]);
+        sh($root, ['git', 'update-ref', "refs/workshop/reference/{$name}", $commit]);
+    } finally {
+        @unlink($index);
+    }
+    echo "refs/workshop/reference/{$name} = ".substr($commit, 0, 12)." ({$branch} + {$files} file di evidenze).", PHP_EOL;
+    echo "Pubblicazione: php workshop/bin/release reference {$name}", PHP_EOL;
+}

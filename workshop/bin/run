@@ -1,0 +1,416 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * php workshop/bin/run 1|2 [--agent=claude|codex] [--timeout=1200] [--force] [--keep]
+ *
+ * Lancia l'agente in modalità headless sul prompt di workshop/prompt.md, sempre con gli stessi
+ * flag, e salva il risultato sul branch run-<N>. Non si interviene durante la run.
+ *
+ *   run 1  in una cartella separata che contiene solo cp-00 (un unico commit, senza
+ *          .harness/ e workshop/esercizi/), con una copia di .env, del database e di vendor/.
+ *          Il working tree del repo non viene toccato. Il risultato diventa run-1 sopra cp-00.
+ *   run 2  nel repo, dal lavoro attuale (stesso codice dell'app di cp-00), sul branch run-2;
+ *          .env e database vengono salvati prima e ripristinati dopo.
+ *
+ * Evidenze in workshop/runs/run-<N>/: manifest.json, agent.jsonl, agent.err, transcript.jsonl,
+ * metrics.json, diff.patch, before/ e after/ (.env e database). Valutazione: workshop/bin/score.
+ *
+ * --agent    default: il contenuto di workshop/agent (lo scrive doctor --agent=…), altrimenti claude
+ * --force    se run-<N> esiste già, lo rinomina in run-<N>-prima-<data> invece di fermarsi
+ * --keep     non cancella la cartella della run 1 (per ispezionarla)
+ * WORKSHOP_CODEX_SANDBOX  sandbox di Codex (default workspace-write; danger-full-access dove bwrap non parte)
+ */
+
+require dirname(__DIR__, 2).'/.harness/lib/workshop.php';
+
+use Workshop as W;
+
+$root = W\root();
+[$args, $opts] = W\parse_args($argv);
+$n = $args[0] ?? '';
+if (! in_array($n, ['1', '2'], true)) {
+    fwrite(STDERR, "Uso: php workshop/bin/run 1|2 [--agent=claude|codex] [--timeout=1200] [--force] [--keep]\n");
+    exit(2);
+}
+$agent = W\default_agent($root, $opts);
+if (! in_array($agent, ['claude', 'codex'], true)) {
+    fwrite(STDERR, "--agent vale claude oppure codex\n");
+    exit(2);
+}
+$timeout = (int) ($opts['timeout'] ?? 1200);
+$branch = "run-{$n}";
+$out = "{$root}/workshop/runs/{$branch}";
+
+try {
+    precheck($root, $n, $agent, $branch, $out, isset($opts['force']));
+    $result = $n === '1'
+        ? run_isolated($root, $agent, $branch, $out, $timeout, isset($opts['keep']))
+        : run_in_place($root, $agent, $branch, $out, $timeout);
+} catch (RuntimeException $e) {
+    fwrite(STDERR, PHP_EOL.'run: '.$e->getMessage().PHP_EOL);
+    exit(1);
+}
+
+$m = $result['metrics'];
+echo PHP_EOL, "{$branch} salvata sul branch {$branch} ({$result['files']} file cambiati, ", round($result['seconds'] / 60, 1), " min, {$m['tool_calls']} tool call",
+    $result['timed_out'] ? ', TIMEOUT' : '', ').', PHP_EOL;
+echo "Evidenze: workshop/runs/{$branch}/ · valutazione: php workshop/bin/score {$branch}", PHP_EOL;
+exit($result['timed_out'] || $result['exit'] !== 0 ? 1 : 0);
+
+// ---------------------------------------------------------------------------
+
+function sh(string $cwd, array $cmd, int $timeout = 300, ?array $env = null): string
+{
+    echo '  $ ', W\show_cmd($cmd), PHP_EOL;
+    $r = W\run($cmd, $cwd, $timeout, null, $env);
+    if ($r['exit'] !== 0) {
+        throw new RuntimeException(W\show_cmd($cmd).': '.trim($r['err']."\n".$r['out']));
+    }
+
+    return rtrim($r['out'], "\n");
+}
+
+function precheck(string $root, string $n, string $agent, string $branch, string $out, bool $force): void
+{
+    echo "run {$n} · agente {$agent}", PHP_EOL;
+    $problems = [];
+    if (W\git_out($root, 'rev-parse', '--verify', '--quiet', 'refs/tags/cp-00^{commit}') === null) {
+        $problems[] = 'manca il tag cp-00: git fetch --tags';
+    }
+    if (in_array(W\env_value(@file_get_contents($root.'/.env') ?: null, 'PAYMENTS_SECRET'), [null, ''], true)) {
+        $problems[] = '.env mancante o senza PAYMENTS_SECRET: php .harness/bin/doctor --fix';
+    }
+    if (! is_file($root.'/database/database.sqlite')) {
+        $problems[] = 'database/database.sqlite mancante: php .harness/bin/doctor --fix';
+    }
+    if (getenv('WORKSHOP_AGENT_STUB') === false && W\run([$agent, '--version'], $root, 30)['exit'] !== 0) {
+        $problems[] = "{$agent} non risponde: php .harness/bin/doctor --agent={$agent}";
+    }
+    if (W\git_out($root, 'rev-parse', '--verify', '--quiet', "refs/heads/{$branch}") !== null) {
+        if (! $force) {
+            $problems[] = "il branch {$branch} esiste già (una run precedente). Per rifarla: --force (lo rinomina, non lo cancella)";
+        }
+    }
+    if ($n === '2') {
+        $suite = trim((string) W\git_out($root, 'for-each-ref', '--format=%(refname)', 'refs/heads/eval', 'refs/workshop/'));
+        if ($suite !== '') {
+            $problems[] = "questo repo contiene la suite o le run del docente ({$suite}): l'agente della run 2 le vedrebbe. Fai la run 2 in un clone del repo pubblico";
+        }
+        if (trim((string) W\git_out($root, 'status', '--porcelain')) !== '') {
+            $problems[] = 'ci sono modifiche non committate: committa il tuo lavoro prima della run 2';
+        }
+        $drift = W\app_drift((string) W\git_out($root, 'diff', 'cp-00', 'HEAD', '--', 'app', 'database', 'routes', 'tests'));
+        if ($drift !== []) {
+            $problems[] = 'il codice dell\'app non è quello di cp-00 (ammessi solo docblock @contract e group di Pest): '.implode(', ', $drift)
+                .'. Riallinea con: git checkout cp-00 -- '.implode(' ', $drift);
+        }
+        if (! is_file($root.'/.harness/memory/progress.md') || ! str_contains((string) file_get_contents($root.'/.harness/memory/progress.md'), 'T-001')) {
+            echo '  WARN  .harness/memory/progress.md non cita T-001: l\'agente non troverà il task attivo', PHP_EOL;
+        }
+    }
+    if ($problems !== []) {
+        throw new RuntimeException("prima di partire:\n  - ".implode("\n  - ", $problems));
+    }
+    foreach (['claude' => W\home_dir().'/.claude/CLAUDE.md', 'codex' => codex_home().'/AGENTS.md'] as $a => $f) {
+        if ($a === $agent && is_file($f)) {
+            echo "  WARN  {$f} esiste: le tue istruzioni globali entrano nella run (annotalo nel confronto)", PHP_EOL;
+        }
+    }
+    if ($force && W\git_out($root, 'rev-parse', '--verify', '--quiet', "refs/heads/{$branch}") !== null) {
+        $old = "{$branch}-prima-".date('Ymd-His');
+        sh($root, ['git', 'branch', '-m', $branch, $old]);
+        if (is_dir($out)) {
+            rename($out, dirname($out)."/{$old}");
+        }
+        echo "  …     il vecchio {$branch} ora si chiama {$old}", PHP_EOL;
+    }
+    W\remove_dir($out);
+    mkdir($out.'/before', 0777, true);
+    mkdir($out.'/after', 0777, true);
+}
+
+function codex_home(): string
+{
+    return rtrim((string) (getenv('CODEX_HOME') ?: W\home_dir().'/.codex'), '/\\');
+}
+
+/** Il comando dell'agente: stessi flag in run 1 e run 2. */
+function agent_command(string $agent, string $prompt): array
+{
+    $stub = getenv('WORKSHOP_AGENT_STUB');
+    if ($stub !== false && $stub !== '') {
+        return [PHP_BINARY, $stub, $agent, $prompt]; // solo per i test degli strumenti
+    }
+
+    return match ($agent) {
+        // acceptEdits + Bash consentito = nessuna richiesta di approvazione, ma le deny rule della run 2 restano valide.
+        'claude' => ['claude', '-p', $prompt, '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits', '--allowedTools', 'Bash'],
+        // Il bypass del trust degli hook è innocuo nella run 1 (nessun hook) e garantisce che nella run 2 girino.
+        'codex' => ['codex', 'exec', '--json', '--sandbox', getenv('WORKSHOP_CODEX_SANDBOX') ?: 'workspace-write',
+            '-c', 'approval_policy="never"', '--dangerously-bypass-hook-trust', $prompt],
+    };
+}
+
+function cli_version(string $agent, string $root): ?string
+{
+    if (getenv('WORKSHOP_AGENT_STUB')) {
+        return 'stub';
+    }
+    $r = W\run([$agent, '--version'], $root, 30);
+
+    return $r['exit'] === 0 ? trim($r['out']) : null;
+}
+
+/** Lancia l'agente in $cwd con il feed dal vivo; restituisce exit, timeout, durata ed eventi. */
+function launch(string $agent, string $cwd, string $out, int $timeout): array
+{
+    $prompt = (string) file_get_contents(W\root().'/workshop/prompt.md');
+    $cmd = agent_command($agent, trim($prompt));
+    $count = 0;
+    $seen = [];
+    echo PHP_EOL, "Feed dell'agente (una riga per tool call). Non intervenire: timeout ", round($timeout / 60), ' min.', PHP_EOL;
+    $r = W\stream_process(
+        $cmd,
+        $cwd,
+        ['CLAUDECODE' => null, 'CLAUDE_CODE_ENTRYPOINT' => null], // da dentro un'altra sessione Claude, `claude -p` non partirebbe
+        $timeout,
+        "{$out}/agent.jsonl",
+        "{$out}/agent.err",
+        function (string $line) use ($agent, $cwd, &$count, &$seen) {
+            $e = json_decode($line, true);
+            if (! is_array($e)) {
+                return;
+            }
+            foreach (W\tool_calls($agent, $e, $cwd) as $call) {
+                if ($call['id'] !== '' && isset($seen[$call['id']])) {
+                    continue;
+                }
+                $seen[$call['id']] = true;
+                echo '  ', W\feed_line(++$count, $call), PHP_EOL;
+            }
+        },
+    );
+    $r['prompt_sha256'] = hash('sha256', $prompt);
+    $r['command'] = W\show_cmd(array_map(fn ($a) => $a === trim($prompt) ? '<workshop/prompt.md>' : $a, $cmd));
+
+    return $r;
+}
+
+/** Copia il transcript della sessione (Claude: ~/.claude/projects, Codex: $CODEX_HOME/sessions). */
+function collect_transcript(string $agent, ?string $session, string $out): ?string
+{
+    if ($session === null || $session === '' || preg_match('/[^\w-]/', $session)) {
+        return null;
+    }
+    $pattern = $agent === 'claude'
+        ? rtrim((string) (getenv('CLAUDE_CONFIG_DIR') ?: W\home_dir().'/.claude'), '/')."/projects/*/{$session}.jsonl"
+        : codex_home()."/sessions/*/*/*/rollout-*{$session}.jsonl";
+    $files = glob($pattern) ?: [];
+    if ($files === []) {
+        return null;
+    }
+    copy($files[0], "{$out}/transcript.jsonl");
+
+    return $files[0];
+}
+
+function metrics_for(string $agent, string $out): array
+{
+    $events = W\jsonl((string) @file_get_contents("{$out}/agent.jsonl"));
+    if ($agent === 'claude') {
+        return W\metrics_claude($events);
+    }
+    $rollout = is_file("{$out}/transcript.jsonl") ? W\jsonl((string) file_get_contents("{$out}/transcript.jsonl")) : null;
+    $prices = json_decode((string) @file_get_contents(W\root().'/workshop/prices.json'), true)['models'] ?? [];
+
+    return W\metrics_codex($events, $rollout, $prices);
+}
+
+function snapshot(string $from, string $to): array
+{
+    $hashes = [];
+    foreach (['.env', 'database/database.sqlite'] as $f) {
+        if (is_file("{$from}/{$f}")) {
+            copy("{$from}/{$f}", "{$to}/".basename($f));
+            $hashes[$f] = hash_file('sha256', "{$from}/{$f}");
+        } else {
+            $hashes[$f] = null;
+        }
+    }
+
+    return $hashes;
+}
+
+function finish(string $agent, string $out, array $launch, array $manifest): array
+{
+    $metrics = metrics_for($agent, $out);
+    if ($launch['timed_out']) {
+        $metrics['completed'] = false;
+    }
+    $transcript = collect_transcript($agent, $metrics['session_id'], $out);
+    if ($agent === 'codex' && $transcript !== null) {
+        $metrics = metrics_for($agent, $out); // con il rollout: richieste, modello e costo
+    }
+    W\write_json("{$out}/metrics.json", $metrics + ['seconds' => $launch['seconds']]);
+    $manifest += [
+        'model' => $metrics['model'],
+        'session_id' => $metrics['session_id'],
+        'transcript' => $transcript === null ? null : 'transcript.jsonl',
+        'seconds' => $launch['seconds'],
+        'exit' => $launch['exit'],
+        'timed_out' => $launch['timed_out'],
+        'command' => $launch['command'],
+        'prompt_sha256' => $launch['prompt_sha256'],
+    ];
+    W\write_json("{$out}/manifest.json", $manifest);
+
+    return $metrics;
+}
+
+/** Run 1: cartella separata con il solo cp-00 filtrato, poi il diff dell'agente diventa run-1 sopra cp-00. */
+function run_isolated(string $root, string $agent, string $branch, string $out, int $timeout, bool $keep): array
+{
+    $base = W\git_out($root, 'rev-parse', 'cp-00^{commit}');
+    $dir = sys_get_temp_dir().'/orders-back-office-'.bin2hex(random_bytes(3));
+    $expected = filtered_tree($root, $base);
+    echo "  …     cartella della run: {$dir}", PHP_EOL;
+    W\extract_tree($root, $expected, $dir);
+
+    // Un solo commit: nessuna storia, nessun tag, nessun file nascosto raggiungibile con git show.
+    sh($dir, ['git', 'init', '-q']);
+    sh($dir, ['git', 'checkout', '-q', '-b', 'main']);
+    sh($dir, ['git', 'add', '-A']);
+    sh($dir, ['git', '-c', 'commit.gpgsign=false', 'commit', '-q', '--no-verify', '-m', 'Orders back office']);
+    $runBase = sh($dir, ['git', 'rev-parse', 'HEAD']);
+    if (sh($dir, ['git', 'rev-parse', 'HEAD^{tree}']) !== $expected) {
+        throw new RuntimeException("l'albero della cartella della run non coincide con cp-00 filtrato ({$dir})");
+    }
+
+    copy("{$root}/.env", "{$dir}/.env");
+    copy("{$root}/database/database.sqlite", "{$dir}/database/database.sqlite");
+    W\copy_dir("{$root}/vendor", "{$dir}/vendor");
+    $where = W\run([PHP_BINARY, '-r', 'require "vendor/autoload.php"; echo (new ReflectionClass(App\Models\Order::class))->getFileName();'], $dir, 60);
+    if (! str_starts_with(trim($where['out']), realpath($dir))) {
+        throw new RuntimeException("vendor/ della run carica l'app da un'altra cartella: ".trim($where['out'].$where['err']));
+    }
+
+    $before = snapshot($dir, "{$out}/before");
+    $startedAt = date('c');
+    $launch = launch($agent, $dir, $out, $timeout);
+    $after = snapshot($dir, "{$out}/after");
+
+    // Tutto ciò che l'agente ha fatto, commit suoi compresi, misurato dalla base.
+    sh($dir, ['git', 'add', '-A']);
+    W\run(['git', '-c', 'commit.gpgsign=false', 'commit', '-q', '--no-verify', '--allow-empty', '-m', 'run'], $dir, 120);
+    $patch = W\run(['git', 'diff', '--binary', $runBase, 'HEAD'], $dir, 120)['out'];
+    file_put_contents("{$out}/diff.patch", $patch);
+
+    $manifest = [
+        'run' => 1, 'agent' => $agent, 'cli_version' => cli_version($agent, $root),
+        'started_at' => $startedAt, 'start_sha' => $base, 'start_ref' => 'cp-00',
+        'workdir' => $dir, 'hidden_paths' => W\RUN1_NASCOSTI, 'before' => $before, 'after' => $after,
+    ];
+    $metrics = finish($agent, $out, $launch, $manifest);
+    $sha = commit_patch($root, $base, $out, $branch, "run 1: output dell'agente ({$agent}/".($metrics['model'] ?? '?').')');
+    $manifest = json_decode((string) file_get_contents("{$out}/manifest.json"), true) + ['end_sha' => $sha];
+    W\write_json("{$out}/manifest.json", $manifest);
+
+    if (! $keep) {
+        W\remove_dir($dir);
+    }
+
+    return $launch + ['metrics' => $metrics, 'files' => count(array_filter(explode("\n", (string) W\git_out($root, 'diff', '--name-only', $base, $sha))))];
+}
+
+/** L'albero di cp-00 senza i path nascosti, calcolato con un indice temporaneo. */
+function filtered_tree(string $root, string $base): string
+{
+    $index = tempnam(sys_get_temp_dir(), 'idx');
+    $env = ['GIT_INDEX_FILE' => $index];
+    try {
+        sh($root, ['git', 'read-tree', $base], 60, $env);
+        sh($root, ['git', 'rm', '-r', '-q', '-f', '--cached', '--ignore-unmatch', '--', ...W\RUN1_NASCOSTI], 60, $env);
+
+        return sh($root, ['git', 'write-tree'], 60, $env);
+    } finally {
+        @unlink($index);
+    }
+}
+
+/** Applica diff.patch sopra $base senza toccare il working tree e crea il branch. */
+function commit_patch(string $root, string $base, string $out, string $branch, string $message): string
+{
+    $index = tempnam(sys_get_temp_dir(), 'idx');
+    $env = ['GIT_INDEX_FILE' => $index];
+    try {
+        sh($root, ['git', 'read-tree', $base], 60, $env);
+        if (filesize("{$out}/diff.patch") > 0) {
+            sh($root, ['git', 'apply', '--cached', '--binary', "{$out}/diff.patch"], 120, $env);
+        }
+        $tree = sh($root, ['git', 'write-tree'], 60, $env);
+        $sha = sh($root, ['git', '-c', 'commit.gpgsign=false', 'commit-tree', $tree, '-p', $base, '-m', $message]);
+        sh($root, ['git', 'update-ref', "refs/heads/{$branch}", $sha, '']);
+
+        return $sha;
+    } finally {
+        @unlink($index);
+    }
+}
+
+/** Run 2: nel repo, sul branch run-2, con .env e database salvati e ripristinati. */
+function run_in_place(string $root, string $agent, string $branch, string $out, int $timeout): array
+{
+    $back = W\git_out($root, 'symbolic-ref', '--short', '-q', 'HEAD');
+    $start = W\git_out($root, 'rev-parse', 'HEAD');
+    sh($root, ['git', 'switch', '-q', '-c', $branch]);
+    $before = snapshot($root, "{$out}/before");
+    $startedAt = date('c');
+    $launch = [];
+    try {
+        $launch = launch($agent, $root, $out, $timeout);
+    } finally {
+        $after = snapshot($root, "{$out}/after");
+        foreach (['.env' => '.env', 'database.sqlite' => 'database/database.sqlite'] as $saved => $f) {
+            if (is_file("{$out}/before/{$saved}")) {
+                copy("{$out}/before/{$saved}", "{$root}/{$f}");
+            }
+        }
+        foreach (harness_artifacts($root, $startedAt) as $name => $file) {
+            copy($file, "{$out}/{$name}");
+        }
+        // L'agente può aver cambiato branch: il risultato è comunque HEAD, misurato da $start.
+        sh($root, ['git', 'add', '-A']);
+        W\run(['git', '-c', 'commit.gpgsign=false', 'commit', '-q', '--no-verify', '--allow-empty', '-m', "run 2: output dell'agente ({$agent})"], $root, 120);
+        $sha = W\git_out($root, 'rev-parse', 'HEAD');
+        sh($root, ['git', 'update-ref', "refs/heads/{$branch}", $sha]);
+        file_put_contents("{$out}/diff.patch", (string) W\run(['git', 'diff', '--binary', $start, $sha], $root, 120)['out']);
+        $back !== null ? sh($root, ['git', 'switch', '-q', $back]) : sh($root, ['git', 'switch', '-q', '--detach', $start]);
+    }
+    $manifest = [
+        'run' => 2, 'agent' => $agent, 'cli_version' => cli_version($agent, $root),
+        'started_at' => $startedAt, 'start_sha' => $start, 'start_ref' => $back ?? $start,
+        'workdir' => $root, 'hidden_paths' => [], 'before' => $before, 'after' => $after, 'end_sha' => $sha,
+    ];
+    $metrics = finish($agent, $out, $launch, $manifest);
+
+    return $launch + ['metrics' => $metrics, 'files' => count(array_filter(explode("\n", (string) W\git_out($root, 'diff', '--name-only', $start, $sha))))];
+}
+
+/** trace.jsonl e receipt.md della run dell'harness più recente (.harness/runs/<run-id>/). */
+function harness_artifacts(string $root, string $since): array
+{
+    $dirs = array_filter(glob($root.'/.harness/runs/*', GLOB_ONLYDIR) ?: [], fn ($d) => filemtime($d) >= strtotime($since));
+    usort($dirs, fn ($a, $b) => filemtime($b) <=> filemtime($a));
+    $found = [];
+    foreach (['trace.jsonl', 'receipt.md'] as $f) {
+        foreach ($dirs as $d) {
+            if (is_file("{$d}/{$f}")) {
+                $found[$f] = "{$d}/{$f}";
+                break;
+            }
+        }
+    }
+
+    return $found;
+}

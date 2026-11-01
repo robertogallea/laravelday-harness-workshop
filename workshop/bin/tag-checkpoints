@@ -1,0 +1,78 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * Solo per il docente, nel repo di build.
+ *
+ * php workshop/bin/tag-checkpoints [<ref>] [--dry-run]
+ *
+ * Ricrea i tag cp-NN dalla storia lineare di <ref> (default HEAD): ogni commit dopo
+ * il primo checkpoint ha i trailer `Checkpoint: cp-NN`, `Exercise: E<n>`,
+ * `Kind: soluzione|ingresso`, e il tag va sull'ultimo commit di ciascun checkpoint.
+ * Correggere un checkpoint = rebase della storia + questo script. Mai tag spostati a mano.
+ */
+
+require dirname(__DIR__, 2).'/.harness/lib/workshop.php';
+
+use Workshop as W;
+
+$root = W\root();
+$ref = 'HEAD';
+$dry = false;
+foreach (array_slice($argv, 1) as $a) {
+    $a === '--dry-run' ? $dry = true : $ref = $a;
+}
+
+if ((W\git_out($root, 'rev-list', '--merges', $ref) ?? '') !== '') {
+    fwrite(STDERR, "La storia di {$ref} contiene dei merge: deve essere lineare (rebase).\n");
+    exit(1);
+}
+
+$log = W\git_out($root, 'log', '--reverse', '--format=%H%x1f%(trailers:key=Checkpoint,valueonly,separator=%x2C)%x1f%s%x1e', $ref) ?? '';
+$history = [];
+$subjects = [];
+foreach (array_filter(array_map('trim', explode("\x1e", $log))) as $entry) {
+    [$sha, $cp, $subject] = explode("\x1f", $entry) + ['', '', ''];
+    $cp = trim($cp);
+    if (str_contains($cp, ',')) {
+        fwrite(STDERR, "Il commit {$sha} ha più di un trailer Checkpoint.\n");
+        exit(1);
+    }
+    $history[] = ['sha' => $sha, 'cp' => $cp === '' ? null : $cp];
+    if ($cp !== '') {
+        $subjects[$cp][] = $subject;
+    }
+}
+
+try {
+    $tags = W\tags_from_history($history);
+} catch (RuntimeException $e) {
+    fwrite(STDERR, $e->getMessage().PHP_EOL);
+    exit(1);
+}
+if ($tags === []) {
+    fwrite(STDERR, "Nessun commit con il trailer Checkpoint: in {$ref}.\n");
+    exit(1);
+}
+
+foreach ($tags as $cp => $sha) {
+    $current = W\git_out($root, 'rev-parse', '--verify', '--quiet', "refs/tags/{$cp}^{commit}");
+    if ($current === $sha) {
+        echo "  =  {$cp} ".substr($sha, 0, 12), PHP_EOL;
+        continue;
+    }
+    echo '  '.($current === null ? '+' : '~')."  {$cp} ".substr($sha, 0, 12).($current ? ' (era '.substr($current, 0, 12).')' : ''), PHP_EOL;
+    if (! $dry) {
+        $msg = "Checkpoint {$cp}\n\n".implode("\n", array_map(fn ($s) => "- {$s}", $subjects[$cp]));
+        $r = W\git($root, 'tag', '-f', '-a', $cp, '-m', $msg, $sha);
+        if ($r['exit'] !== 0) {
+            fwrite(STDERR, $r['err']);
+            exit(1);
+        }
+    }
+}
+
+$stale = array_diff(W\local_cps($root), array_keys($tags));
+foreach ($stale as $cp) {
+    echo "  ?  {$cp} esiste ma nessun commit lo dichiara più: git tag -d {$cp}", PHP_EOL;
+}

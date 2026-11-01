@@ -1,0 +1,308 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * php .harness/bin/doctor [--agent=claude|codex] [--fix]
+ *
+ * Prework e diagnosi: una riga per controllo, OK / FAIL / WARN / SKIP e il comando
+ * che risolve. Exit 1 se manca un controllo bloccante. Con --fix prepara quello che
+ * può preparare da solo: composer install, .env con il canary, database migrato.
+ * I file di controlli dei checkpoint possono aggiungere controlli (chiave `doctor`).
+ */
+
+require __DIR__.'/../lib/workshop.php';
+
+use Workshop as W;
+use Workshop\Ctx;
+
+$root = W\root();
+$opts = getopt('', ['agent:', 'fix', 'help']);
+if (isset($opts['help'])) {
+    echo "Uso: php .harness/bin/doctor [--agent=claude|codex] [--fix]\n";
+    exit(0);
+}
+$agent = $opts['agent'] ?? null;
+if ($agent !== null && ! in_array($agent, ['claude', 'codex'], true)) {
+    fwrite(STDERR, "--agent vale claude oppure codex\n");
+    exit(2);
+}
+$fix = isset($opts['fix']);
+$ctx = new Ctx($root);
+
+$checks = [
+    'PHP ≥ 8.3 con pdo_sqlite, mbstring, tokenizer' => function (Ctx $c) {
+        if (PHP_VERSION_ID < 80300) {
+            return $c->fail('PHP '.PHP_VERSION, 'installa PHP 8.3 o successivo');
+        }
+        $missing = array_values(array_filter(['pdo_sqlite', 'mbstring', 'tokenizer'], fn ($e) => ! extension_loaded($e)));
+
+        return $missing === [] ?: $c->fail('mancano: '.implode(', ', $missing), 'installa le estensioni PHP mancanti');
+    },
+    'Composer' => fn (Ctx $c) => $c->run(['composer', '--version'], 30)['exit'] === 0
+        ?: $c->fail('composer non risponde', 'https://getcomposer.org/download/'),
+    'git: repo del workshop, eol=lf, identità per i commit' => function (Ctx $c) {
+        $top = W\git_out($c->root, 'rev-parse', '--show-toplevel');
+        if ($top === null || realpath($top) !== realpath($c->root)) {
+            return $c->fail('la cartella non è la root di un repo git', 'git clone del repo del workshop');
+        }
+        if (! preg_match('/eol=lf/', (string) $c->read('.gitattributes'))) {
+            return $c->fail('.gitattributes senza eol=lf', 'git checkout cp-00 -- .gitattributes');
+        }
+        foreach (['user.name' => 'Nome Cognome', 'user.email' => 'tu@example.com'] as $key => $example) {
+            if ((W\git_out($c->root, 'config', $key) ?? '') === '') {
+                return $c->fail("git {$key} non impostato: i comandi di checkpoint fanno dei commit", "git config --global {$key} \"{$example}\"");
+            }
+        }
+
+        return true;
+    },
+    'vendor/ installato e coerente con composer.lock' => function (Ctx $c) use ($fix) {
+        $problem = vendor_problem($c);
+        if ($problem !== null && $fix) {
+            echo "  …     composer install\n";
+            $c->run(['composer', 'install', '--no-interaction', '--no-progress'], 900);
+            $problem = vendor_problem($c);
+        }
+
+        return $problem === null ?: $c->fail($problem, 'composer install');
+    },
+    '.env con il canary in PAYMENTS_SECRET e APP_KEY' => function (Ctx $c) use ($fix) {
+        if ($fix) {
+            fix_env($c);
+        }
+        $env = $c->read('.env');
+        if ($env === null) {
+            return $c->fail('manca .env', 'php .harness/bin/doctor --fix');
+        }
+        if (! preg_match('/^PAYMENTS_SECRET=sk_live_WORKSHOP_CANARY_\w+$/m', $env)) {
+            return $c->fail('PAYMENTS_SECRET non contiene il canary sk_live_WORKSHOP_CANARY_…', 'svuota PAYMENTS_SECRET in .env, poi php .harness/bin/doctor --fix');
+        }
+        if (! preg_match('/^APP_KEY=\S+$/m', $env)) {
+            return $c->fail('APP_KEY vuota', 'php artisan key:generate');
+        }
+
+        return true;
+    },
+    'l\'app si avvia (php artisan --version)' => function (Ctx $c) {
+        $r = $c->run(['php', 'artisan', '--version'], 60);
+
+        return $r['exit'] === 0 ?: $c->fail(first_line($r), 'composer install, poi php .harness/bin/doctor --fix');
+    },
+    'database/database.sqlite migrato' => function (Ctx $c) use ($fix) {
+        if ($fix && is_file($c->path('vendor/autoload.php'))) {
+            fix_database($c);
+        }
+        if (! $c->exists('database/database.sqlite')) {
+            return $c->fail('manca database/database.sqlite', 'php .harness/bin/doctor --fix');
+        }
+        $r = $c->run(['php', 'artisan', 'migrate:status', '--no-ansi'], 60);
+        if ($r['exit'] !== 0) {
+            return $c->fail(first_line($r), 'php artisan migrate --seed');
+        }
+
+        return ! str_contains($r['out'], 'Pending') ?: $c->fail('migrazioni in sospeso', 'php artisan migrate');
+    },
+    'Pest e Pint' => function (Ctx $c) {
+        foreach ([['php', 'vendor/bin/pest', '--list-tests'], ['php', 'vendor/bin/pint', '--version']] as $cmd) {
+            $r = $c->run($cmd, 120);
+            if ($r['exit'] !== 0) {
+                return $c->fail(implode(' ', $cmd).': '.first_line($r), 'composer install');
+            }
+        }
+
+        return true;
+    },
+    'PHPStan' => fn (Ctx $c) => $c->exists('vendor/bin/phpstan')
+        ? ($c->run(['php', 'vendor/bin/phpstan', '--version'], 60)['exit'] === 0 ?: $c->fail('phpstan non risponde', 'composer install'))
+        : $c->warn('non installato: il feedback del post-edit (E6) sarà vuoto'),
+    'server MCP del progetto (.mcp.json)' => function (Ctx $c) {
+        $servers = $c->json('.mcp.json')['mcpServers'] ?? null;
+        if (! is_array($servers) || $servers === []) {
+            return $c->skip('nessun server MCP in questo checkpoint');
+        }
+        $out = [];
+        foreach ($servers as $name => $s) {
+            $out[] = $c->named("server MCP {$name}", mcp_starts($c, $s));
+        }
+
+        return $out;
+    },
+];
+
+$agentChecks = match ($agent) {
+    'claude' => claude_checks(),
+    'codex' => codex_checks(),
+    default => ['agente' => fn (Ctx $c) => $c->skip('aggiungi --agent=claude oppure --agent=codex per controllare l\'agente')],
+};
+
+$extra = [];
+foreach (W\local_declaration_files($root) as $file) {
+    $extra += W\load_declaration($file)['doctor'];
+}
+
+echo 'doctor'.($agent ? " --agent={$agent}" : '').($fix ? ' --fix' : ''), PHP_EOL;
+[$fail, $warn] = W\print_results(W\run_checks($checks + $agentChecks + $extra, $ctx));
+echo PHP_EOL;
+if ($fail > 0) {
+    echo "{$fail} controll".($fail === 1 ? 'o bloccante rosso' : 'i bloccanti rossi').'. Segui le frecce e rilancia doctor.', PHP_EOL;
+    exit(1);
+}
+if ($agent !== null) {
+    file_put_contents($root.'/workshop/agent', $agent.PHP_EOL); // agente di default per workshop/bin/run e fallback
+}
+echo 'Pronto'.($warn > 0 ? " ({$warn} avvis".($warn === 1 ? 'o' : 'i').')' : '').($agent ? " Agente delle run: {$agent}" : '').'.', PHP_EOL;
+exit(0);
+
+// ---------------------------------------------------------------------------
+
+function first_line(array $r): string
+{
+    $text = trim($r['err']) !== '' ? $r['err'] : $r['out'];
+
+    return trim(strtok(trim($text), "\n") ?: "exit {$r['exit']}");
+}
+
+function vendor_problem(Ctx $c): ?string
+{
+    if (! $c->exists('vendor/autoload.php')) {
+        return 'vendor/ non installato';
+    }
+    $lock = $c->json('composer.lock');
+    $installed = $c->json('vendor/composer/installed.json');
+    if (! is_array($lock) || ! is_array($installed)) {
+        return 'composer.lock o vendor/composer/installed.json illeggibili';
+    }
+    $have = [];
+    foreach ($installed['packages'] ?? $installed as $p) {
+        $have[$p['name']] = $p['version'];
+    }
+    foreach ([...$lock['packages'] ?? [], ...$lock['packages-dev'] ?? []] as $p) {
+        if (($have[$p['name']] ?? null) !== $p['version']) {
+            return "{$p['name']} è ".($have[$p['name']] ?? 'assente')." invece di {$p['version']}";
+        }
+    }
+
+    return null;
+}
+
+/** .env da .env.example, mai sovrascritto; il canary va solo in un PAYMENTS_SECRET vuoto. */
+function fix_env(Ctx $c): void
+{
+    if (! $c->exists('.env')) {
+        if (! $c->exists('.env.example')) {
+            return;
+        }
+        copy($c->path('.env.example'), $c->path('.env'));
+        echo "  …     .env creato da .env.example\n";
+    }
+    $env = (string) $c->read('.env');
+    if (preg_match('/^PAYMENTS_SECRET=\s*$/m', $env) || ! preg_match('/^PAYMENTS_SECRET=/m', $env)) {
+        $canary = 'PAYMENTS_SECRET=sk_live_WORKSHOP_CANARY_'.bin2hex(random_bytes(8));
+        $env = preg_match('/^PAYMENTS_SECRET=/m', $env)
+            ? preg_replace('/^PAYMENTS_SECRET=.*$/m', $canary, $env)
+            : rtrim($env, "\n")."\n{$canary}\n";
+        file_put_contents($c->path('.env'), $env);
+        echo "  …     canary scritto in PAYMENTS_SECRET\n";
+    }
+    if (preg_match('/^APP_KEY=\s*$/m', $env) && $c->exists('vendor/autoload.php')) {
+        $c->run(['php', 'artisan', 'key:generate', '--force', '--no-interaction'], 60);
+        echo "  …     php artisan key:generate\n";
+    }
+}
+
+function fix_database(Ctx $c): void
+{
+    $new = ! $c->exists('database/database.sqlite');
+    if ($new) {
+        touch($c->path('database/database.sqlite'));
+    }
+    $cmd = ['php', 'artisan', 'migrate', '--force', '--no-interaction', ...($new ? ['--seed'] : [])];
+    $r = $c->run($cmd, 300);
+    if ($new || ! str_contains($r['out'], 'Nothing to migrate')) {
+        echo '  …     '.implode(' ', $cmd).($r['exit'] === 0 ? '' : ' (fallito)')."\n";
+    }
+}
+
+/** Avvia il server, aspetta 2 s: se è ancora vivo (o è uscito con 0) parte. */
+function mcp_starts(Ctx $c, array $server): W\Esito
+{
+    $cmd = [$server['command'] ?? '', ...($server['args'] ?? [])];
+    $p = @proc_open($cmd, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $c->root);
+    if (! is_resource($p)) {
+        return $c->warn('non parte: '.implode(' ', $cmd));
+    }
+    usleep(2_000_000);
+    $status = proc_get_status($p);
+    $err = $status['running'] ? '' : trim((string) stream_get_contents($pipes[2]));
+    if ($status['running']) {
+        proc_terminate($p);
+    }
+    foreach ($pipes as $pipe) {
+        fclose($pipe);
+    }
+    proc_close($p);
+
+    return $status['running'] || $status['exitcode'] === 0
+        ? $c->ok()
+        : $c->warn('è uscito con '.$status['exitcode'].($err !== '' ? ': '.strtok($err, "\n") : ''), implode(' ', $cmd));
+}
+
+function home(): string
+{
+    return rtrim((string) (getenv('HOME') ?: getenv('USERPROFILE')), '/\\');
+}
+
+function claude_checks(): array
+{
+    return [
+        'Claude Code installato' => function (Ctx $c) {
+            $r = $c->run(['claude', '--version'], 30);
+
+            return $r['exit'] === 0 ? $c->ok(trim($r['out'])) : $c->fail('claude non risponde', 'https://docs.claude.com/claude-code');
+        },
+        'Claude Code autenticato' => function (Ctx $c) {
+            $r = $c->run(['claude', 'auth', 'status'], 30);
+            $status = json_decode($r['out'], true);
+
+            return ($status['loggedIn'] ?? false) === true ?: $c->fail('non hai fatto il login', 'claude, poi /login');
+        },
+        'Claude Code: trust della cartella' => function (Ctx $c) {
+            $projects = json_decode((string) @file_get_contents(home().'/.claude.json'), true)['projects'] ?? [];
+            $trusted = false;
+            for ($dir = realpath($c->root); ! $trusted && $dir !== dirname($dir); $dir = dirname($dir)) {
+                $trusted = $projects[$dir]['hasTrustDialogAccepted'] ?? false; // vale anche il trust di una cartella madre
+            }
+
+            return $trusted ?: $c->warn('la cartella non risulta trusted', 'apri `claude` in questa cartella e accetta il trust');
+        },
+        'istruzioni globali di Claude (~/.claude/CLAUDE.md)' => fn (Ctx $c) => ! is_file(home().'/.claude/CLAUDE.md')
+            ?: $c->warn('le tue istruzioni globali entrano nelle run (workshop/bin/run non usa un profilo separato): rinominale per il giorno del workshop'),
+    ];
+}
+
+function codex_checks(): array
+{
+    $codexHome = rtrim((string) (getenv('CODEX_HOME') ?: home().'/.codex'), '/\\');
+
+    return [
+        'Codex installato' => function (Ctx $c) {
+            $r = $c->run(['codex', '--version'], 30);
+
+            return $r['exit'] === 0 ? $c->ok(trim($r['out'])) : $c->fail('codex non risponde', 'npm install -g @openai/codex');
+        },
+        'Codex autenticato' => fn (Ctx $c) => $c->run(['codex', 'login', 'status'], 30)['exit'] === 0
+            ?: $c->fail('non hai fatto il login', 'codex login'),
+        'Codex: progetto trusted' => function (Ctx $c) use ($codexHome) {
+            $config = (string) @file_get_contents($codexHome.'/config.toml');
+            $root = preg_quote(realpath($c->root), '/');
+            $trusted = preg_match('/^\[projects\."'.$root.'"\]\s*\R(?:(?!\[)[^\n]*\R)*?\s*trust_level\s*=\s*"trusted"/m', $config);
+
+            return $trusted === 1 ?: $c->fail(
+                'il progetto non è trusted in '.$codexHome.'/config.toml',
+                'apri `codex` in questa cartella e scegli di fidarti del progetto (non si imposta con -c)',
+            );
+        },
+        'istruzioni globali di Codex (~/.codex/AGENTS.md)' => fn (Ctx $c) => ! is_file($codexHome.'/AGENTS.md')
+            ?: $c->warn('le tue istruzioni globali entrano nelle run (workshop/bin/run non usa un profilo separato): rinominale per il giorno del workshop'),
+    ];
+}

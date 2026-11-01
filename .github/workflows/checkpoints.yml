@@ -1,0 +1,44 @@
+name: checkpoints
+
+# Su ogni push del repo di build: ricrea i tag dai trailer e controlla tutti i checkpoint
+# (verify verde, esercitazione successiva rossa, diff dichiarati, regola d'ingresso, invarianti).
+
+on:
+  push:
+    branches: [main]
+    tags: ['cp-*']
+  workflow_dispatch:
+
+jobs:
+  checkpoints:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.3', '8.5']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pdo_sqlite, mbstring
+          tools: composer:v2
+
+      - name: Identità git per i tag annotati e i commit di prova
+        run: |
+          git config --global user.name "workshop-ci"
+          git config --global user.email "ci@example.invalid"
+
+      - name: Test degli strumenti del workshop
+        run: |
+          composer install --no-interaction --no-progress
+          vendor/bin/pest -c .harness/tests/phpunit.xml --test-directory=.harness/tests
+
+      - name: Tag dai trailer
+        run: php workshop/bin/tag-checkpoints
+
+      - name: Controlli su ogni checkpoint
+        run: php workshop/bin/ci-checkpoints

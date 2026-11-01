@@ -1,0 +1,179 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * Solo per il docente, nel repo di build.
+ *
+ * php workshop/bin/release cp-NN [--remote=public] [--force]
+ *     pubblica il tag cp-NN sul remote pubblico (cp-00 porta con sé anche main),
+ *     poi controlla con ls-remote che il remote mostri lo stesso tag.
+ *     Spinge SOLO refs/tags/cp-NN: mai --tags, --mirror o il main di build.
+ *
+ * php workshop/bin/release eval [--remote=public] [--force]
+ *     pubblica la suite di valutazione (branch orfano `eval`) come refs/workshop/eval,
+ *     un ref che `git clone` non scarica. SOLO DOPO LA RUN 2: da lì score la trova.
+ *
+ * php workshop/bin/release reference <nome> [--remote=public] [--force]
+ *     pubblica una run di riferimento (refs/workshop/reference/<nome>, creata da
+ *     `fallback --save`), che `fallback` scarica quando la run di un partecipante fallisce.
+ *
+ * php workshop/bin/release --bundle cp-NN [--out=dist/bundles]
+ * php workshop/bin/release --bundle --all [--out=dist/bundles]
+ *     bundle cumulativo per la chiavetta USB: cp-NN.bundle contiene i tag da cp-01
+ *     a cp-NN e richiede cp-00 (che il partecipante ha dal clone).
+ */
+
+require dirname(__DIR__, 2).'/.harness/lib/workshop.php';
+
+use Workshop as W;
+
+$root = W\root();
+$args = array_values(array_filter(array_slice($argv, 1), fn ($a) => ! str_starts_with($a, '--')));
+$opts = [];
+foreach (array_slice($argv, 1) as $a) {
+    if (preg_match('/^--([\w-]+)(?:=(.*))?$/', $a, $m)) {
+        $opts[$m[1]] = $m[2] ?? true;
+    }
+}
+
+try {
+    if (isset($opts['bundle'])) {
+        $out = is_string($opts['out'] ?? null) ? $opts['out'] : $root.'/dist/bundles';
+        $targets = isset($opts['all']) ? W\local_cps($root) : [$args[0] ?? ''];
+        foreach ($targets as $cp) {
+            bundle($root, $cp, $out);
+        }
+        exit(0);
+    }
+    $remote = is_string($opts['remote'] ?? null) ? $opts['remote'] : 'public';
+    if (($args[0] ?? '') === 'eval') {
+        publish_ref($root, 'refs/heads/eval', 'refs/workshop/eval', $remote, isset($opts['force']));
+        exit(0);
+    }
+    if (($args[0] ?? '') === 'reference') {
+        $name = $args[1] ?? '';
+        if (! preg_match('/^[\w.-]+$/', $name)) {
+            throw new RuntimeException('Uso: php workshop/bin/release reference <nome> (es. claude-run-1)');
+        }
+        publish_ref($root, "refs/workshop/reference/{$name}", "refs/workshop/reference/{$name}", $remote, isset($opts['force']));
+        exit(0);
+    }
+    $cp = $args[0] ?? '';
+    publish($root, $cp, is_string($opts['remote'] ?? null) ? $opts['remote'] : 'public', isset($opts['force']));
+} catch (RuntimeException $e) {
+    fwrite(STDERR, $e->getMessage().PHP_EOL);
+    exit(1);
+}
+
+function sh(string $root, array $cmd): string
+{
+    echo '$ ', W\show_cmd($cmd), PHP_EOL;
+    $r = W\run($cmd, $root, 600);
+    if ($r['exit'] !== 0) {
+        throw new RuntimeException(trim($r['err']."\n".$r['out']));
+    }
+
+    return $r['out'];
+}
+
+function require_tag(string $root, string $cp): string
+{
+    if (! W\is_cp($cp)) {
+        throw new RuntimeException("Uso: php workshop/bin/release cp-NN [--remote=public] [--force]");
+    }
+    if (W\git_out($root, 'cat-file', '-t', "refs/tags/{$cp}") !== 'tag') {
+        throw new RuntimeException("{$cp} non è un tag annotato in locale: php workshop/bin/tag-checkpoints");
+    }
+
+    return W\git_out($root, 'rev-parse', "refs/tags/{$cp}");
+}
+
+function publish(string $root, string $cp, string $remote, bool $force): void
+{
+    $local = require_tag($root, $cp);
+    if (W\git_out($root, 'remote', 'get-url', $remote) === null) {
+        throw new RuntimeException("Remote {$remote} non configurato: git remote add {$remote} <url del repo pubblico>");
+    }
+    $remoteSha = remote_tag($root, $remote, $cp);
+    if ($remoteSha === $local) {
+        echo "{$cp} è già pubblicato su {$remote}.", PHP_EOL;
+
+        return;
+    }
+    if ($remoteSha !== null && ! $force) {
+        throw new RuntimeException("{$remote} ha già un {$cp} diverso. Correggere un checkpoint pubblicato: --force, poi in sala `git fetch --tags --force` (lo fa già `checkpoint inizia`).");
+    }
+    $plus = $remoteSha !== null ? '+' : '';
+    $refspecs = ["{$plus}refs/tags/{$cp}:refs/tags/{$cp}"];
+    if ($cp === 'cp-00') {
+        $refspecs[] = ($force ? '+' : '')."{$cp}^{commit}:refs/heads/main";
+    }
+    sh($root, ['git', 'push', $remote, ...$refspecs]);
+
+    $after = remote_tag($root, $remote, $cp);
+    if ($after !== $local) {
+        throw new RuntimeException("Dopo il push {$remote} mostra {$cp} = ".($after ?? 'niente')." invece di {$local}.");
+    }
+    echo PHP_EOL, "Pubblicato {$cp} su {$remote} (".substr($local, 0, 12).'). In sala: php workshop/bin/checkpoint inizia …', PHP_EOL;
+}
+
+/** Spinge un ref locale su un ref non clonato del remote e lo ricontrolla con ls-remote. */
+function publish_ref(string $root, string $local, string $remoteRef, string $remote, bool $force): void
+{
+    $sha = W\git_out($root, 'rev-parse', '--verify', '--quiet', "{$local}^{commit}");
+    if ($sha === null) {
+        throw new RuntimeException("{$local} non esiste in locale.");
+    }
+    if (W\git_out($root, 'remote', 'get-url', $remote) === null) {
+        throw new RuntimeException("Remote {$remote} non configurato: git remote add {$remote} <url del repo pubblico>");
+    }
+    $before = remote_ref($root, $remote, $remoteRef);
+    if ($before === $sha) {
+        echo "{$remoteRef} è già pubblicato su {$remote}.", PHP_EOL;
+
+        return;
+    }
+    if ($before !== null && ! $force) {
+        throw new RuntimeException("{$remote} ha già un {$remoteRef} diverso: --force per sostituirlo.");
+    }
+    sh($root, ['git', 'push', $remote, ($before !== null ? '+' : '')."{$sha}:{$remoteRef}"]);
+    if (remote_ref($root, $remote, $remoteRef) !== $sha) {
+        throw new RuntimeException("Dopo il push {$remote} non mostra {$remoteRef} = {$sha}.");
+    }
+    echo PHP_EOL, "Pubblicato {$remoteRef} su {$remote} (".substr($sha, 0, 12).').', PHP_EOL;
+}
+
+function remote_ref(string $root, string $remote, string $ref): ?string
+{
+    $out = W\git_out($root, 'ls-remote', $remote, $ref);
+    if ($out === null) {
+        throw new RuntimeException("ls-remote su {$remote} non riuscito.");
+    }
+
+    return $out === '' ? null : strtok($out, "\t");
+}
+
+function remote_tag(string $root, string $remote, string $cp): ?string
+{
+    $out = W\git_out($root, 'ls-remote', '--tags', $remote, "refs/tags/{$cp}");
+    if ($out === null) {
+        throw new RuntimeException("ls-remote su {$remote} non riuscito.");
+    }
+
+    return $out === '' ? null : strtok($out, "\t");
+}
+
+function bundle(string $root, string $cp, string $out): void
+{
+    require_tag($root, $cp);
+    if (! is_dir($out) && ! mkdir($out, 0777, true)) {
+        throw new RuntimeException("Non riesco a creare {$out}");
+    }
+    $file = rtrim($out, '/')."/{$cp}.bundle";
+    $tags = array_values(array_filter(W\local_cps($root), fn ($t) => strnatcmp($t, $cp) <= 0));
+    $refs = $cp === 'cp-00'
+        ? ['refs/tags/cp-00']
+        : [...array_map(fn ($t) => "refs/tags/{$t}", array_diff($tags, ['cp-00'])), '^refs/tags/cp-00'];
+    sh($root, ['git', 'bundle', 'create', $file, ...$refs]);
+    echo sh($root, ['git', 'bundle', 'list-heads', $file]);
+}

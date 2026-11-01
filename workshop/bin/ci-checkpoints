@@ -1,0 +1,162 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * Solo per il docente e per la CI, nel repo di build.
+ *
+ * php workshop/bin/ci-checkpoints [--only=cp-NN] [--keep]
+ *
+ * Su ogni tag cp-NN, in un worktree temporaneo con il suo composer install:
+ *   1. doctor --fix (senza agente) e `verify cp-NN` verde;
+ *   2. test negativo: `verify` dell'esercitazione successiva rosso;
+ *   3. diff dichiarati: cp-(n-1)..cp-n tocca solo uscita(E_n) ∪ ingresso(E_n+1) e non cancella file;
+ *   4. regola d'ingresso: ingresso(E_n+1) ∩ uscita(E_1…E_n) = ∅; i path dichiarati esistono nel tag;
+ *   5. invarianti: composer.lock, migrazioni, verify, doctor, lib, test degli strumenti, workshop/ e .github identici a cp-00
+ *      (tranne workshop/esercizi/: la consegna di un'esercitazione arriva con il suo ingresso);
+ *      niente laravel/ai, niente file in .harness/runs o .harness/state;
+ *   6. vista della run 1 (solo cp-00): fuori da app/, tests/ e dai path nascosti alla run 1
+ *      nessun file contiene le parole che rivelerebbero cosa si misura (W\PAROLE_RIVELATRICI).
+ * Exit 1 al primo checkpoint con un controllo rosso (gli altri vengono comunque stampati).
+ */
+
+require dirname(__DIR__, 2).'/.harness/lib/workshop.php';
+
+use Workshop as W;
+
+$root = W\root();
+$opts = getopt('', ['only:', 'keep']);
+$cps = W\local_cps($root);
+if ($cps === []) {
+    fwrite(STDERR, "Nessun tag cp-*: php workshop/bin/tag-checkpoints\n");
+    exit(1);
+}
+
+/** Dichiarazioni: per ogni checkpoint la versione nel tag che lo chiude, oppure nell'ultimo tag che la contiene. */
+$decls = [];
+foreach (array_reverse($cps) as $tag) {
+    foreach (explode("\n", W\git_out($root, 'ls-tree', '--name-only', "{$tag}:.harness/checkpoints/") ?? '') as $f) {
+        $cp = basename($f, '.php');
+        if (W\is_cp($cp) && ! isset($decls[$cp])) {
+            $decls[$cp] = W\load_declaration_from_tag($root, in_array($cp, $cps, true) ? $cp : $tag, $cp);
+        }
+    }
+}
+
+$failed = 0;
+foreach ($cps as $i => $tag) {
+    if (isset($opts['only']) && $opts['only'] !== $tag) {
+        continue;
+    }
+    echo PHP_EOL, "== {$tag}", PHP_EOL;
+    $prev = $cps[$i - 1] ?? null;
+    $next = next_declared($tag, $root);
+    $results = [];
+    $ok = function (string $t, bool $cond, string $msg = '') use (&$results): void {
+        $results[] = [$t, new W\Esito($cond ? 'OK' : 'FAIL', $cond ? '' : $msg)];
+    };
+
+    // 4. dichiarazioni coerenti
+    foreach ($decls[$tag]['uscita'] ?? [] as $p) {
+        $ok("uscita {$p} esiste in {$tag}", exists_in($root, $tag, $p), 'path dichiarato ma assente');
+    }
+    if ($next !== null) {
+        foreach ($decls[$next]['ingresso'] ?? [] as $p) {
+            $ok("ingresso di {$next}: {$p} esiste in {$tag}", exists_in($root, $tag, $p), 'path dichiarato ma assente');
+        }
+    }
+    $upTo = array_filter($decls, fn ($cp) => strnatcmp($cp, $next ?? $tag) <= 0, ARRAY_FILTER_USE_KEY);
+    $coll = W\collisions(array_map(fn ($d) => ['ingresso' => $d['ingresso'], 'uscita' => $d['uscita']], $upTo));
+    $ok('regola d\'ingresso (nessuna collisione con le uscite precedenti)', $coll === [], json_encode($coll));
+
+    // 3. diff dichiarati
+    if ($prev !== null) {
+        $changed = lines(W\git_out($root, 'diff', '--name-only', '--no-renames', $prev, $tag));
+        $deleted = lines(W\git_out($root, 'diff', '--name-only', '--no-renames', '--diff-filter=D', $prev, $tag));
+        $allowed = [...($decls[$tag]['uscita'] ?? []), ...($next ? $decls[$next]['ingresso'] : [])];
+        $extra = W\undeclared($changed, $allowed);
+        $ok("{$prev}..{$tag} tocca solo i path dichiarati", $extra === [], implode(', ', $extra));
+        $ok("{$prev}..{$tag} non cancella file", $deleted === [], implode(', ', $deleted));
+    }
+
+    // 5. invarianti
+    if ($tag !== 'cp-00') {
+        $frozen = ['composer.lock', 'database/migrations', '.harness/bin/verify', '.harness/bin/doctor', '.harness/lib/workshop.php', '.harness/tests', 'workshop', ':(exclude)workshop/esercizi', '.github'];
+        $drift = lines(W\git_out($root, 'diff', '--name-only', 'cp-00', $tag, '--', ...$frozen));
+        $ok('identici a cp-00: lock, migrazioni, verify, doctor, lib, test, workshop/ (consegne escluse), .github', $drift === [], implode(', ', $drift));
+    }
+    $ok('laravel/ai assente dal lock', ! str_contains(W\git_out($root, 'show', "{$tag}:composer.lock") ?? '', '"name": "laravel/ai"'));
+    $runs = lines(W\git_out($root, 'ls-tree', '-r', '--name-only', $tag, '--', '.harness/runs', '.harness/state'));
+    $ok('nessun file in .harness/runs o .harness/state', $runs === [], implode(', ', $runs));
+
+    // 6. vista della run 1
+    if ($tag === 'cp-00') {
+        $visible = array_map(fn ($p) => ":(exclude){$p}", ['app', 'tests', ...W\RUN1_NASCOSTI]);
+        $words = array_merge(...array_map(fn ($w) => ['-e', $w], W\PAROLE_RIVELATRICI));
+        $g = W\git($root, 'grep', '-l', '-F', ...[...$words, $tag, '--', '.', ...$visible]); // exit 1 = nessuna occorrenza
+        $hits = lines($g['out']);
+        $ok('vista della run 1: nessuna parola rivelatrice fuori da app/ e tests/', $g['exit'] === 1, $g['exit'] > 1 ? trim($g['err']) : implode(', ', $hits));
+    }
+
+    // 1–2. verify nel worktree
+    $wt = sys_get_temp_dir().'/ci-'.$tag.'-'.bin2hex(random_bytes(3));
+    W\git($root, 'worktree', 'add', '--detach', $wt, $tag);
+    try {
+        $step = fn (array $cmd, int $t = 900) => W\run($cmd, $wt, $t);
+        $c = $step(['composer', 'install', '--no-interaction', '--no-progress', '--quiet']);
+        $ok('composer install', $c['exit'] === 0, trim($c['err']));
+        $d = $step(['php', '.harness/bin/doctor', '--fix']);
+        $ok('doctor --fix', $d['exit'] === 0, tail($d));
+        $v = $step(['php', '.harness/bin/verify', $tag]);
+        $ok("verify {$tag} verde", $v['exit'] === 0, tail($v));
+        if ($next !== null) {
+            $es = W\exercise_for($next);
+            $n = $step(['php', '.harness/bin/verify', $es]);
+            $ok("verify {$es} rosso su {$tag} (l'esercitazione c'è davvero)", $n['exit'] === 1, "exit {$n['exit']}");
+        } else {
+            $results[] = ['esercitazione successiva', new W\Esito('SKIP', "nessun ingresso in {$tag}")];
+        }
+    } finally {
+        if (! isset($opts['keep'])) {
+            W\git($root, 'worktree', 'remove', '--force', $wt);
+        } else {
+            echo "  (worktree lasciato in {$wt})", PHP_EOL;
+        }
+    }
+
+    [$f] = W\print_results($results);
+    $failed += $f;
+}
+
+echo PHP_EOL, $failed === 0 ? 'Tutti i checkpoint sono verdi.' : "{$failed} controlli rossi.", PHP_EOL;
+exit($failed === 0 ? 0 : 1);
+
+// ---------------------------------------------------------------------------
+
+/** L'esercitazione il cui file di controlli è entrato con $tag (il suo ingresso). */
+function next_declared(string $tag, string $root): ?string
+{
+    $files = lines(W\git_out($root, 'ls-tree', '--name-only', "{$tag}:.harness/checkpoints/"));
+    $later = array_values(array_filter(
+        array_map(fn ($f) => basename($f, '.php'), $files),
+        fn ($cp) => W\is_cp($cp) && strnatcmp($cp, $tag) > 0,
+    ));
+
+    return W\sort_cps($later)[0] ?? null;
+}
+
+function exists_in(string $root, string $tag, string $path): bool
+{
+    return W\git($root, 'cat-file', '-e', "{$tag}:{$path}")['exit'] === 0;
+}
+
+function lines(?string $s): array
+{
+    return array_values(array_filter(explode("\n", (string) $s)));
+}
+
+function tail(array $r): string
+{
+    $all = array_filter(explode("\n", trim($r['out']."\n".$r['err'])));
+
+    return implode(' | ', array_slice($all, -4));
+}

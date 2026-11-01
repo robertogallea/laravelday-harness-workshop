@@ -1,0 +1,139 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * php .harness/bin/verify E<n>     controlli di una sola esercitazione
+ * php .harness/bin/verify cp-NN    "sei allineato a cp-NN?": i controlli da cp-00 a cp-NN,
+ *                                  quelli di allineamento di cp-NN e i file forniti invariati
+ *
+ * I controlli stanno in .harness/checkpoints/cp-NN.php e arrivano con l'ingresso
+ * dell'esercitazione. Exit 0 = verde (anche con WARN), 1 = almeno un FAIL.
+ */
+
+require __DIR__.'/../lib/workshop.php';
+
+use Workshop as W;
+
+$root = W\root();
+$arg = $argv[1] ?? '';
+
+if (preg_match('/^[Ee]\d/', $arg)) {
+    exit(verify_exercise($root, ucfirst($arg)));
+}
+if (W\is_cp($arg)) {
+    exit(verify_checkpoint($root, $arg));
+}
+
+fwrite(STDERR, <<<'TXT'
+Uso:
+  php .harness/bin/verify E<n>     controlla un'esercitazione (es. E1, E2b)
+  php .harness/bin/verify cp-NN    controlla l'allineamento a un checkpoint (es. cp-01)
+
+TXT);
+exit(2);
+
+function verify_exercise(string $root, string $esercizio): int
+{
+    try {
+        $cp = W\cp_for($esercizio);
+    } catch (InvalidArgumentException $e) {
+        fwrite(STDERR, $e->getMessage().PHP_EOL);
+
+        return 2;
+    }
+    $file = "{$root}/.harness/checkpoints/{$cp}.php";
+    if (! is_file($file)) {
+        echo "  FAIL  controlli di {$esercizio} — non ci sono ancora (.harness/checkpoints/{$cp}.php)", PHP_EOL;
+        echo "        → php workshop/bin/checkpoint inizia {$esercizio}", PHP_EOL;
+
+        return 1;
+    }
+
+    echo "verify {$esercizio}", PHP_EOL;
+    $decl = W\load_declaration($file);
+    [$fail] = W\print_results(W\run_checks($decl['controlli'], new W\Ctx($root)));
+    echo PHP_EOL;
+    if ($fail > 0) {
+        echo "{$esercizio}: {$fail} controll".($fail === 1 ? 'o rosso' : 'i rossi').'.', PHP_EOL;
+        echo "Se vuoi la soluzione del docente: php workshop/bin/checkpoint prendi {$esercizio}", PHP_EOL;
+
+        return 1;
+    }
+    echo "{$esercizio}: verde.", PHP_EOL;
+
+    return 0;
+}
+
+function verify_checkpoint(string $root, string $target): int
+{
+    $ctx = new W\Ctx($root);
+    $files = array_filter(W\local_declaration_files($root), fn ($cp) => strnatcmp($cp, $target) <= 0, ARRAY_FILTER_USE_KEY);
+    $rossi = [];
+    $fail = 0;
+
+    echo "verify {$target}", PHP_EOL;
+    if (! isset($files[$target])) {
+        $es = W\exercise_for($target);
+        echo "  FAIL  controlli di {$target} — mancano (.harness/checkpoints/{$target}.php)", PHP_EOL;
+        echo '        → '.($es ? "php workshop/bin/checkpoint inizia {$es}" : "php workshop/bin/checkpoint salta {$target}"), PHP_EOL;
+        $fail++;
+    }
+
+    foreach ($files as $cp => $file) {
+        $decl = W\load_declaration($file);
+        $checks = $decl['controlli'] + ($cp === $target ? $decl['allineamento'] : []);
+        if ($checks === []) {
+            continue;
+        }
+        echo PHP_EOL, $cp.($decl['esercizio'] ? " · {$decl['esercizio']}" : ''), PHP_EOL;
+        [$f] = W\print_results(W\run_checks($checks, $ctx));
+        $fail += $f;
+        if ($f > 0 && $decl['esercizio']) {
+            $rossi[] = $decl['esercizio'];
+        }
+    }
+
+    echo PHP_EOL, 'file forniti', PHP_EOL;
+    [$f] = W\print_results(forniti($ctx, $target));
+    $fail += $f;
+
+    echo PHP_EOL;
+    if ($fail === 0) {
+        echo "Sei allineato a {$target}.", PHP_EOL;
+
+        return 0;
+    }
+    echo "Non sei allineato a {$target}: {$fail} controll".($fail === 1 ? 'o rosso' : 'i rossi').'. Prima i rimedi indicati dalle frecce, poi:', PHP_EOL;
+    foreach ($rossi as $es) {
+        echo "  php workshop/bin/checkpoint prendi {$es}", PHP_EOL;
+    }
+    echo "  se lo stato è confuso: php workshop/bin/checkpoint salta {$target}", PHP_EOL;
+
+    return 1;
+}
+
+/** I file forniti dal workshop sono quelli del tag: modificati = FAIL, mancanti = WARN. */
+function forniti(W\Ctx $ctx, string $tag): array
+{
+    if (W\git_out($ctx->root, 'rev-parse', '--verify', '--quiet', "refs/tags/{$tag}") === null) {
+        return [['uguali al tag', $ctx->fail("il tag {$tag} non c'è in locale", 'git fetch origin --tags --force')]];
+    }
+    $diff = fn (string $filter) => array_values(array_filter(explode("\n", W\git_out(
+        $ctx->root, 'diff', '--name-only', '--no-renames', "--diff-filter={$filter}", $tag, '--', ...W\FORNITI,
+    ) ?? '')));
+
+    $out = [];
+    $modificati = $diff('M');
+    $out[] = ['modificati rispetto a '.$tag, $modificati === []
+        ? $ctx->ok()
+        : $ctx->fail(implode(', ', $modificati), "git checkout {$tag} -- ".implode(' ', $modificati))];
+    $mancanti = $diff('D');
+    if ($mancanti !== []) {
+        $out[] = ['mancanti rispetto a '.$tag, $ctx->warn(
+            implode(', ', $mancanti).' (arrivano con `checkpoint inizia`)',
+            "git checkout {$tag} -- ".implode(' ', $mancanti),
+        )];
+    }
+
+    return $out;
+}

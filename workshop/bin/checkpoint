@@ -1,0 +1,255 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * php workshop/bin/checkpoint inizia E<n>   porta nel tuo branch l'ingresso dell'esercitazione
+ * php workshop/bin/checkpoint prendi E<n>   prende la soluzione di una sola esercitazione
+ * php workshop/bin/checkpoint salta cp-NN   riparte da un branch nuovo creato dal checkpoint
+ *
+ * Opzioni: --bundle=<file>   importa i checkpoint dalla chiavetta invece che dal remote
+ *          --remote=<nome>   remote da cui scaricare i tag (default: origin)
+ *          --dry-run         stampa i comandi senza eseguirli
+ *
+ * Prima di cambiare qualcosa fa sempre un commit di quello che hai. Stampa ogni
+ * comando git che esegue. Non usa mai reset --hard, stash, clean, merge o detached HEAD.
+ */
+
+require dirname(__DIR__, 2).'/.harness/lib/workshop.php';
+
+use Workshop as W;
+
+$root = W\root();
+$args = array_values(array_filter(array_slice($argv, 1), fn ($a) => ! str_starts_with($a, '--')));
+$opts = [];
+foreach (array_slice($argv, 1) as $a) {
+    if (preg_match('/^--([\w-]+)(?:=(.*))?$/', $a, $m)) {
+        $opts[$m[1]] = $m[2] ?? true;
+    }
+}
+[$verb, $target] = $args + [null, null];
+$dry = isset($opts['dry-run']);
+
+if (! in_array($verb, ['inizia', 'prendi', 'salta'], true) || $target === null) {
+    fwrite(STDERR, <<<'TXT'
+Uso:
+  php workshop/bin/checkpoint inizia E<n>   porta l'ingresso dell'esercitazione nel tuo branch
+  php workshop/bin/checkpoint prendi E<n>   prendi la soluzione di un'esercitazione che ti manca
+  php workshop/bin/checkpoint salta cp-NN   riparti da un branch nuovo creato dal checkpoint
+Opzioni: --bundle=<file> (dalla chiavetta), --remote=<nome>, --dry-run
+
+TXT);
+    exit(2);
+}
+
+try {
+    $branch = preflight($root);
+    fetch($root, $opts, $dry);
+    $plan = match ($verb) {
+        'inizia' => state_inizia($root, ucfirst($target)),
+        'prendi' => state_prendi($root, ucfirst($target)),
+        'salta' => state_salta($root, $target),
+    };
+} catch (RuntimeException|InvalidArgumentException $e) {
+    fwrite(STDERR, $e->getMessage().PHP_EOL);
+    exit(1);
+}
+
+if ($bad = W\forbidden_in_plan($plan)) {
+    fwrite(STDERR, 'Piano rifiutato, contiene: '.implode(', ', $bad).PHP_EOL);
+    exit(1);
+}
+
+exit(execute($root, $plan, $dry));
+
+// ---------------------------------------------------------------------------
+
+/** Il branch corrente; si rifiuta su detached HEAD, run-N, merge o rebase in corso. */
+function preflight(string $root): string
+{
+    if (W\git_out($root, 'rev-parse', '--show-toplevel') === null) {
+        throw new RuntimeException('Non sei in un repo git.');
+    }
+    foreach (['MERGE_HEAD', 'rebase-merge', 'rebase-apply', 'CHERRY_PICK_HEAD'] as $marker) {
+        $path = W\git_out($root, 'rev-parse', '--git-path', $marker);
+        if ($path !== null && file_exists(($path[0] === '/' ? '' : $root.'/').$path)) {
+            throw new RuntimeException("C'è un'operazione git in corso ({$marker}). Chiudila (git merge --abort / git rebase --abort) e riprova.");
+        }
+    }
+    $branch = W\git_out($root, 'symbolic-ref', '--short', '-q', 'HEAD');
+    if ($branch === null || $branch === '') {
+        throw new RuntimeException("Sei in detached HEAD: i commit qui si perdono. Crea un branch e riprova:\n  git switch -c mio-lavoro");
+    }
+    if (preg_match('/^run-\d+$/', $branch)) {
+        throw new RuntimeException("Sei sul branch {$branch}, che appartiene alla run. Torna al tuo branch:\n  git switch mio-lavoro");
+    }
+
+    return $branch;
+}
+
+function fetch(string $root, array $opts, bool $dry): void
+{
+    if (isset($opts['bundle'])) {
+        $bundle = (string) $opts['bundle'];
+        if (! is_file($bundle)) {
+            throw new RuntimeException("Bundle non trovato: {$bundle}");
+        }
+        $cmd = ['git', 'fetch', $bundle, '+refs/tags/*:refs/tags/*'];
+    } else {
+        $remote = is_string($opts['remote'] ?? null) ? $opts['remote'] : 'origin';
+        if (W\git_out($root, 'remote', 'get-url', $remote) === null) {
+            echo "(nessun remote {$remote}: uso i checkpoint che hai già in locale)", PHP_EOL;
+
+            return;
+        }
+        $cmd = ['git', 'fetch', $remote, '--tags', '--force'];
+    }
+    if (exec_step($root, W\step_run($cmd), $dry) !== 0) {
+        throw new RuntimeException('Il fetch non è riuscito. Senza rete: --bundle=/percorso/della/chiavetta/cp-NN.bundle');
+    }
+}
+
+function dirty(string $root): bool
+{
+    return (W\git_out($root, 'status', '--porcelain') ?? '') !== '';
+}
+
+function has_tag(string $root, string $tag): bool
+{
+    return W\git_out($root, 'rev-parse', '--verify', '--quiet', "refs/tags/{$tag}") !== null;
+}
+
+function differs(string $root, string $tag, string $path): bool
+{
+    return W\git($root, 'diff', '--quiet', $tag, '--', $path)['exit'] !== 0;
+}
+
+function state_inizia(string $root, string $esercizio): array
+{
+    $cp = W\cp_for($esercizio);
+    $tag = W\previous_cp($cp, W\local_cps($root));
+    if ($tag === null) {
+        throw new RuntimeException("Non trovo il checkpoint che precede {$cp}. Hai fatto il fetch? git fetch origin --tags --force");
+    }
+    $decl = W\load_declaration_from_tag($root, $tag, $cp);
+    if ($decl === null) {
+        throw new RuntimeException("{$tag} non contiene l'ingresso di {$esercizio}: il docente non ha ancora pubblicato il checkpoint giusto. Aspetta la transizione e riprova.");
+    }
+    $gia = array_values(array_filter(
+        $decl['ingresso'],
+        fn ($p) => in_array($p, $decl['uscita'], true) && file_exists("{$root}/{$p}") && differs($root, $tag, $p),
+    ));
+
+    return W\plan_inizia([
+        'esercizio' => $esercizio,
+        'tag' => $tag,
+        'dirty' => dirty($root),
+        'precedente' => W\exercise_for($tag),
+        'ingresso' => $decl['ingresso'],
+        'gia_iniziati' => $gia,
+    ]);
+}
+
+function state_prendi(string $root, string $esercizio): array
+{
+    $tag = W\cp_for($esercizio);
+    if (! has_tag($root, $tag)) {
+        throw new RuntimeException("{$tag} non è ancora pubblicato: la soluzione di {$esercizio} esce alla fine dell'esercitazione.");
+    }
+    $decl = W\load_declaration_from_tag($root, $tag, $tag);
+    if ($decl === null || $decl['uscita'] === []) {
+        throw new RuntimeException("{$tag} non dichiara l'uscita di {$esercizio}.");
+    }
+    $sovrascritti = array_values(array_filter(
+        explode("\n", W\git_out($root, 'diff', '--name-only', '--diff-filter=M', $tag, '--', ...$decl['uscita']) ?? ''),
+    ));
+
+    return W\plan_prendi([
+        'esercizio' => $esercizio,
+        'tag' => $tag,
+        'dirty' => dirty($root),
+        'uscita' => $decl['uscita'],
+        'sovrascritti' => $sovrascritti,
+        'stato' => W\stato_files($root),
+    ]);
+}
+
+function state_salta(string $root, string $tag): array
+{
+    if (! W\is_cp($tag)) {
+        throw new InvalidArgumentException("«{$tag}» non è un checkpoint (esempio: cp-05).");
+    }
+    if (! has_tag($root, $tag)) {
+        throw new RuntimeException("{$tag} non è ancora pubblicato.");
+    }
+    $branch = "mio-{$tag}";
+    for ($i = 2; W\git_out($root, 'rev-parse', '--verify', '--quiet', "refs/heads/{$branch}") !== null; $i++) {
+        $branch = "mio-{$tag}-{$i}";
+    }
+
+    return W\plan_salta([
+        'tag' => $tag,
+        'dirty' => dirty($root),
+        'branch' => $branch,
+        'stato' => W\stato_files($root),
+    ]);
+}
+
+function exec_step(string $root, array $step, bool $dry): int
+{
+    if ($step['type'] === 'note') {
+        echo '# ', $step['text'], PHP_EOL;
+
+        return 0;
+    }
+    if ($step['type'] === 'rm') {
+        echo '$ rm ', $step['path'], PHP_EOL;
+        if (! $dry) {
+            @unlink("{$root}/{$step['path']}");
+        }
+
+        return 0;
+    }
+    if (($step['if_staged'] ?? false) && ! $dry && W\git($root, 'diff', '--cached', '--quiet')['exit'] === 0) {
+        echo '$ ', W\show_cmd($step['cmd']), '   # saltato: niente di nuovo', PHP_EOL;
+
+        return 0;
+    }
+    echo '$ ', W\show_cmd($step['cmd']), PHP_EOL;
+    if ($dry) {
+        return 0;
+    }
+    // passthru per mostrare l'output di git e verify mentre arriva; la cwd torna com'era anche su errore.
+    $cwd = getcwd();
+    chdir($root);
+    try {
+        passthru(implode(' ', array_map('escapeshellarg', $step['cmd'])), $exit);
+    } finally {
+        chdir($cwd);
+    }
+
+    return $exit;
+}
+
+function execute(string $root, array $plan, bool $dry): int
+{
+    $result = 0;
+    foreach ($plan as $step) {
+        $exit = exec_step($root, $step, $dry);
+        if ($exit === 0) {
+            continue;
+        }
+        if ($step['check'] ?? false) {
+            $result = ($step['advisory'] ?? false) ? $result : $exit;
+            if (isset($step['if_red'])) {
+                echo PHP_EOL, $step['if_red'], PHP_EOL;
+            }
+            continue;
+        }
+        fwrite(STDERR, PHP_EOL."Il comando è fallito: mi fermo qui. Non ho cancellato niente; il tuo lavoro è nei commit del branch.".PHP_EOL);
+
+        return 1;
+    }
+    echo PHP_EOL, 'Fatto. Chiudi e riapri l\'agente: contesto, AGENTS.md e hook si leggono all\'avvio della sessione.', PHP_EOL;
+
+    return $result;
+}

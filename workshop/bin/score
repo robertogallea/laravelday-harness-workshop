@@ -1,0 +1,56 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * php workshop/bin/score run-1|run-2|<branch> [--brief] [--eval=<ref>] [--keep]
+ *
+ * Valuta una run con la suite del docente. La suite e lo script di valutazione non stanno
+ * nel repo: arrivano dal ref refs/workshop/eval del remote, pubblicato dal docente solo
+ * dopo la run 2. Qui c'è solo il lanciatore.
+ *
+ * Dove cerca la suite, in ordine: --eval=<ref>, refs/workshop/eval locale, il branch eval
+ * (repo di build del docente), `git fetch origin refs/workshop/eval` (senza creare ref locali).
+ *
+ * --brief  solo i conteggi (Baseline, dichiarazione dell'agente, Eval x/7)
+ * --keep   lascia il worktree di valutazione per ispezionarlo
+ */
+
+require dirname(__DIR__, 2).'/.harness/lib/workshop.php';
+
+use Workshop as W;
+
+$root = W\root();
+[$args, $opts] = W\parse_args($argv);
+$target = $args[0] ?? '';
+if ($target === '') {
+    fwrite(STDERR, "Uso: php workshop/bin/score run-1|run-2|<branch> [--brief] [--eval=<ref>] [--keep]\n");
+    exit(2);
+}
+
+$evalSha = null;
+$candidates = is_string($opts['eval'] ?? null) ? [$opts['eval']] : ['refs/workshop/eval', 'refs/heads/eval'];
+foreach ($candidates as $ref) {
+    $evalSha ??= W\git_out($root, 'rev-parse', '--verify', '--quiet', "{$ref}^{commit}");
+}
+if ($evalSha === null && ! isset($opts['eval'])) {
+    $f = W\git($root, 'fetch', '-q', '--no-tags', 'origin', 'refs/workshop/eval');
+    $evalSha = $f['exit'] === 0 ? W\git_out($root, 'rev-parse', 'FETCH_HEAD^{commit}') : null;
+}
+if ($evalSha === null) {
+    fwrite(STDERR, "La suite del docente non è ancora pubblicata: arriva dopo la run 2. Poi rilancia: php workshop/bin/score {$target}\n");
+    exit(3);
+}
+
+$evalDir = sys_get_temp_dir().'/eval-'.bin2hex(random_bytes(3));
+try {
+    W\extract_tree($root, $evalSha, $evalDir);
+    if (! is_file("{$evalDir}/eval/score.php")) {
+        throw new RuntimeException('il ref della suite non contiene eval/score.php');
+    }
+    require "{$evalDir}/eval/score.php";
+} catch (RuntimeException $e) {
+    fwrite(STDERR, 'score: '.$e->getMessage().PHP_EOL);
+    exit(1);
+} finally {
+    W\remove_dir($evalDir);
+}
