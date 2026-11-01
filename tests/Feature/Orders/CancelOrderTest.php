@@ -27,7 +27,7 @@ it('lets the owner cancel a pending order', function () {
         ->and($entry->payload)->toBe(['reason' => 'Ordinato per errore']);
 
     Event::assertDispatched(OrderCancelled::class, fn ($event) => $event->order->is($order));
-});
+})->group('CANCEL-INV-1');
 
 it('does not let other users cancel the order', function () {
     $order = Order::factory()->create();
@@ -37,7 +37,7 @@ it('does not let other users cancel the order', function () {
         ->assertForbidden();
 
     expect($order->fresh()->status)->toBe(OrderStatus::Pending);
-});
+})->group('CANCEL-INV-1');
 
 it('does not cancel a paid order', function () {
     $order = Order::factory()->paid()->create();
@@ -47,7 +47,7 @@ it('does not cancel a paid order', function () {
         ->assertForbidden();
 
     expect($order->fresh()->status)->toBe(OrderStatus::Paid);
-});
+})->group('CANCEL-INV-1');
 
 it('rolls back and does not announce the cancellation when the audit fails', function () {
     Event::fake([OrderCancelled::class]);
@@ -60,7 +60,7 @@ it('rolls back and does not announce the cancellation when the audit fails', fun
 
     expect($order->fresh()->status)->toBe(OrderStatus::Pending);
     Event::assertNotDispatched(OrderCancelled::class);
-});
+})->group('CANCEL-INV-2', 'CANCEL-INV-3');
 
 it('announces the cancellation only after the transaction commits', function () {
     $order = Order::factory()->create();
@@ -74,4 +74,4 @@ it('announces the cancellation only after the transaction commits', function () 
     app(CancelOrder::class)->handle($order, $order->user, 'Test');
 
     expect($levelsAtDispatch)->toBe([$levelBefore]);
-});
+})->group('CANCEL-INV-3');
