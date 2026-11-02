@@ -10,10 +10,6 @@ declare(strict_types=1);
  *   stringa  → deny; il testo lo legge l'agente, quindi digli cosa fare invece
  * La prima regola che nega vince. L'id ('env.access') finisce nel motivo, nel trace e nelle Lessons.
  *
- * E5: due famiglie di regole, env.* e migration.*, cinque TODO. Ognuno si chiude da solo e si prova da solo:
- *   php .harness/bin/replay .harness/fixtures/pre-tool/<fixture>.json   (le fixture sono nel TODO)
- *   php .harness/bin/verify E5                                          (tutte, alla fine)
- *
  * $p    Harness\Payload: tool (shell|read|write|patch|other), command, files [{path, op}],
  *       added [path => testo aggiunto], writes(), paths(). Path relativi alla root.
  * $ctx  config  .harness/config.php
@@ -42,40 +38,59 @@ return [
     },
 
     'env.access' => function (Payload $p, array $ctx) use ($isEnv): ?string {
-        // E5 — TODO 1: nega se uno dei file toccati ($p->paths(), letture comprese) è un .env.
-        //              Usa $isEnv($path): .env.example deve restare leggibile.
-        //              Diventano verdi: claude-read-env, claude-grep-env (restano verdi: claude-read-env-example).
-        // E5 — TODO 2: Codex non ha un tool Read, le letture passano dalla shell.
-        //              Nega se $p->tool === 'shell' e $p->command nomina un file .env (cat .env, grep X .env,
-        //              cat .env | grep …), ma non .env.example.
-        //              Diventano verdi: codex-cat-env, codex-cat-env-pipe, claude-bash-cat-env, claude-bash-php-env (restano verdi: codex-cat-env-example).
-        // Il motivo lo legge l'agente: digli dove trovare quello che cerca invece.
+        foreach ($p->paths() as $path) {
+            // Un glob di Grep/Glob (".env*") conta come lettura del file che nomina.
+            if ($isEnv($path) || (str_contains($path, '.env') && ! str_contains($path, '.env.example') && glob_match($path, '.env'))) {
+                return "Accesso a {$path} negato: contiene segreti. Le variabili sono documentate in .env.example; la configurazione in config/services.php; nei test usa \$this->fakePayments().";
+            }
+        }
+        if ($p->tool === 'shell' && preg_match('/(?<![\w.-])\.env(?!\.example\b)(\.[\w-]+)?(?![\w.-])/', $p->command)) {
+            return 'Il comando nomina un file .env: negato, contiene segreti. Leggi .env.example o config/services.php; nei test usa $this->fakePayments().';
+        }
+
         return null;
     },
 
     'migration.command' => function (Payload $p, array $ctx): ?string {
-        // E5 — TODO 3: nega i comandi che cancellano o riscrivono dati (solo se $p->tool === 'shell'):
-        //              artisan migrate:fresh | migrate:refresh | migrate:reset | migrate:rollback, db:wipe.
-        //              `php artisan migrate` (in avanti) resta permesso.
-        //              Diventa verde: codex-migrate-fresh (resta verde: codex-migrate).
+        if ($p->tool === 'shell' && preg_match('/\bartisan\s+(migrate:(fresh|refresh|reset|rollback)|db:wipe)\b/', $p->command, $m)) {
+            return "`{$m[0]}` cancella o riscrive dati: negato. Scrivi una migrazione nuova e additiva e lancia `php artisan migrate`; se serve davvero, chiedilo all'umano con [ATTESA-UMANO].";
+        }
+
         return null;
     },
 
     'migration.edit-existing' => function (Payload $p, array $ctx) use ($isMigration): ?string {
-        // E5 — TODO 4: nega la scrittura di una migrazione che esisteva già al commit base:
-        //              $isMigration($path) && $ctx['tracked']($path). Va creata una migrazione nuova.
-        //              Guarda $p->writes() e anche $ctx['shell_writes'] (sed -i, cp, > …).
-        //              Diventano verdi: claude-edit-existing-migration, codex-patch-existing-migration.
+        foreach ([...$p->writes(), ...$ctx['shell_writes']] as $path) {
+            if ($isMigration($path) && $ctx['tracked']($path)) {
+                return "{$path} è una migrazione già eseguita: non si modifica. Crea una migrazione nuova e additiva (php artisan make:migration).";
+            }
+        }
+
         return null;
     },
 
     'migration.destructive' => function (Payload $p, array $ctx) use ($isMigration): ?string {
-        // E5 — TODO 5: nel testo aggiunto a una migrazione ($p->added[$path]), dentro up():
-        //              ->change(), dropColumn, renameColumn, Schema::drop / dropIfExists / rename.
-        //              dropUnique è permesso; in down() il rollback è normale (perché?).
-        //              $ctx['config']['guarded_columns'] dice quali colonne proteggere (['*'] = tutte).
-        //              Diventano verdi: codex-patch-amount-change, claude-write-migration-drop-column
-        //              (resta verde: codex-patch-additive-ok, che fa dropUnique e dropColumn in down()).
+        $guarded = $ctx['config']['guarded_columns'];
+        foreach ($p->added as $path => $text) {
+            if (! $isMigration($path)) {
+                continue;
+            }
+            // Solo up(): dropColumn e dropIfExists in down() sono il normale rollback di una migrazione additiva.
+            $up = preg_match('/function\s+up\s*\(.*?(?=function\s+down\s*\(|\z)/s', $text, $m) ? $m[0] : $text;
+            foreach (preg_split('/\R/', $up) ?: [] as $line) {
+                if (! preg_match('/->change\(\)|->(dropColumn|dropColumns|renameColumn)\(|Schema::(drop|dropIfExists|rename)\(/', $line)) {
+                    continue;
+                }
+                if (str_contains($line, 'dropIfExists') && preg_match('/Schema::create\(/', $up)) {
+                    continue; // una tabella creata e ricreata nella stessa migrazione
+                }
+                $hit = $guarded === ['*'] || array_filter($guarded, fn ($c) => str_contains($line, "'".substr((string) strrchr('.'.$c, '.'), 1)."'"));
+                if ($hit) {
+                    return "Operazione distruttiva in {$path}: `".trim($line)."`. Solo migrazioni nuove e additive; un cambio di colonna richiede l'umano e un ADR.";
+                }
+            }
+        }
+
         return null;
     },
 
