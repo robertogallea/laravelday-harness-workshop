@@ -145,8 +145,9 @@ $newTests = W\count_new_tests($diff);
 $trace = W\jsonl((string) @file_get_contents("{$art}/trace.jsonl"));
 $blocks = ['pre' => [], 'stop' => []];
 foreach ($trace as $t) {
+    // Eventi dell'harness: pre_tool.denied (il guard ha negato), stop.blocked e stop.escalated (lo stop ha trovato rossi).
     $type = (string) ($t['event'] ?? $t['type'] ?? '');
-    if (str_ends_with($type, '.blocked')) {
+    if (in_array($type, ['pre_tool.denied', 'stop.blocked', 'stop.escalated'], true)) {
         $blocks[str_starts_with($type, 'stop') ? 'stop' : 'pre'][] = $t;
     }
 }
