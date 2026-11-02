@@ -1,0 +1,24 @@
+{
+  "_expect": "post_edit.checked",
+  "_files": {
+    "tests/Feature/E6ReplayTest.php": "samples/test-pest.php"
+  },
+  "_commands": 2,
+  "_context": false,
+  "_why": "Un test Pest pulito ($this nelle closure è il TestCase): anche tests/ si controlla, senza falsi allarmi.",
+  "session_id": "replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "acceptEdits",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "{{ROOT}}/tests/Feature/E6ReplayTest.php",
+    "content": "<?php\n\nuse App\\Models\\Order;\nuse App\\Models\\User;\n\nit('lascia vedere un ordine al suo cliente', function () {\n    $this->fakePayments();\n    $customer = User::factory()->create();\n    $order = Order::factory()->for($customer, 'customer')->create();\n\n    $this->actingAs($customer)->getJson(\"/api/orders/{$order->id}\")->assertOk();\n    expect($this->payments)->not->toBeNull();\n})->group('E6-REPLAY');\n"
+  },
+  "tool_response": {
+    "filePath": "{{ROOT}}/tests/Feature/E6ReplayTest.php",
+    "success": true
+  },
+  "tool_use_id": "toolu_replay"
+}

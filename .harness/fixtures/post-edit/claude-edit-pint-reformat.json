@@ -1,0 +1,30 @@
+{
+  "_expect": "post_edit.checked",
+  "_files": {
+    "app/Support/E6Formato.php": "samples/formato.php"
+  },
+  "_commands": 2,
+  "_context": true,
+  "_contains": [
+    "E6Formato.php",
+    "Pint"
+  ],
+  "_why": "Pint ha riformattato il file: l'agente lo rilegge prima della prossima Edit, o il suo old_string non combacia più.",
+  "session_id": "replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "acceptEdits",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "{{ROOT}}/app/Support/E6Formato.php",
+    "old_string": "return 0;",
+    "new_string": "return 0;",
+    "replace_all": false
+  },
+  "tool_response": {
+    "filePath": "{{ROOT}}/app/Support/E6Formato.php",
+    "success": true
+  },
+  "tool_use_id": "toolu_replay"
+}

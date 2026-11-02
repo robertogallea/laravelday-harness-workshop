@@ -1,0 +1,23 @@
+{
+  "_expect": "post_edit.checked",
+  "_commands": 0,
+  "_context": false,
+  "_why": "Non è PHP: nessun comando.",
+  "session_id": "replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "acceptEdits",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "{{ROOT}}/docs/glossary.md",
+    "old_string": "# ",
+    "new_string": "# ",
+    "replace_all": false
+  },
+  "tool_response": {
+    "filePath": "{{ROOT}}/docs/glossary.md",
+    "success": true
+  },
+  "tool_use_id": "toolu_replay"
+}

@@ -1,0 +1,23 @@
+{
+  "_expect": "post_edit.checked",
+  "_commands": 0,
+  "_context": false,
+  "_why": "Finisce in .php ma è un template Blade, fuori da app/, database/, tests/: nessun comando: Pint e PHPStan non sono fatti per i template.",
+  "session_id": "replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "acceptEdits",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "{{ROOT}}/resources/views/welcome.blade.php",
+    "old_string": "<html",
+    "new_string": "<html",
+    "replace_all": false
+  },
+  "tool_response": {
+    "filePath": "{{ROOT}}/resources/views/welcome.blade.php",
+    "success": true
+  },
+  "tool_use_id": "toolu_replay"
+}
