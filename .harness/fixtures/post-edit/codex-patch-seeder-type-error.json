@@ -1,0 +1,27 @@
+{
+  "_expect": "post_edit.checked",
+  "_files": {
+    "database/seeders/E6Seeder.php": "samples/seeder.php"
+  },
+  "_commands": 2,
+  "_context": true,
+  "_contains": [
+    "E6Seeder.php",
+    "$reason",
+    "expects string, int given"
+  ],
+  "_why": "Una patch di Codex su due file: il .php sotto database/ si controlla, il Markdown no.",
+  "session_id": "replay",
+  "turn_id": "turn-replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-replay",
+  "permission_mode": "default",
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Add File: database/seeders/E6Seeder.php\n+<?php\n+\n+namespace Database\\Seeders;\n+\n+use App\\Actions\\Orders\\CancelOrder;\n+use App\\Models\\Order;\n+use App\\Models\\User;\n+use Illuminate\\Database\\Seeder;\n+\n+class E6Seeder extends Seeder\n+{\n+    public function run(CancelOrder $cancel): void\n+    {\n+        $admin = User::query()->firstOrFail();\n+\n+        Order::query()->each(fn (Order $order) => $cancel->handle($order, $admin, 42));\n+    }\n+}\n*** Update File: docs/glossary.md\n@@\n ## Termini\n+\n*** End Patch\n"
+  },
+  "tool_response": "Success. Updated the following files:\n",
+  "tool_use_id": "call-replay"
+}

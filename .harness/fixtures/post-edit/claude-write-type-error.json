@@ -1,0 +1,28 @@
+{
+  "_expect": "post_edit.checked",
+  "_files": {
+    "app/Support/E6Centesimi.php": "samples/centesimi.php"
+  },
+  "_commands": 2,
+  "_context": true,
+  "_contains": [
+    "E6Centesimi.php",
+    "should return int but returns string"
+  ],
+  "_why": "Un errore di tipo: l'agente lo legge subito, con il file, la riga e il messaggio di PHPStan.",
+  "session_id": "replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "acceptEdits",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "{{ROOT}}/app/Support/E6Centesimi.php",
+    "content": "<?php\n\nnamespace App\\Support;\n\nuse App\\Models\\Order;\n\nclass E6Centesimi\n{\n    public function inEuro(Order $order): int\n    {\n        return number_format($order->amount / 100, 2);\n    }\n}\n"
+  },
+  "tool_response": {
+    "filePath": "{{ROOT}}/app/Support/E6Centesimi.php",
+    "success": true
+  },
+  "tool_use_id": "toolu_replay"
+}

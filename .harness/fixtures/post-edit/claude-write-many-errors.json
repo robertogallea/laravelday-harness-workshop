@@ -1,0 +1,28 @@
+{
+  "_expect": "post_edit.checked",
+  "_files": {
+    "app/Support/E6Tanti.php": "samples/tanti.php"
+  },
+  "_commands": 2,
+  "_context": true,
+  "_contains": [
+    "E6Tanti.php",
+    "m1()"
+  ],
+  "_why": "30 errori: i primi 10 bastano, e il testo deve stare nei 1500 caratteri da solo.",
+  "session_id": "replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "acceptEdits",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "{{ROOT}}/app/Support/E6Tanti.php",
+    "content": "<?php\n\nnamespace App\\Support;\n\nclass E6Tanti\n{\n    public function m1(): int\n    {\n        return 'x1';\n    }\n\n    public function m2(): int\n    {\n        return 'x2';\n    }\n\n    public function m3(): int\n    {\n        return 'x3';\n    }\n\n    public function m4(): int\n    {\n        return 'x4';\n    }\n\n    public function m5(): int\n    {\n        return 'x5';\n    }\n\n    public function m6(): int\n    {\n        return 'x6';\n    }\n\n    public function m7(): int\n    {\n        return 'x7';\n    }\n\n    public function m8(): int\n    {\n        return 'x8';\n    }\n\n    public function m9(): int\n    {\n        return 'x9';\n    }\n\n    public function m10(): int\n    {\n        return 'x10';\n    }\n\n    public function m11(): int\n    {\n        return 'x11';\n    }\n\n    public function m12(): int\n    {\n        return 'x12';\n    }\n\n    public function m13(): int\n    {\n        return 'x13';\n    }\n\n    public function m14(): int\n    {\n        return 'x14';\n    }\n\n    public function m15(): int\n    {\n        return 'x15';\n    }\n\n    public function m16(): int\n    {\n        return 'x16';\n    }\n\n    public function m17(): int\n    {\n        return 'x17';\n    }\n\n    public function m18(): int\n    {\n        return 'x18';\n    }\n\n    public function m19(): int\n    {\n        return 'x19';\n    }\n\n    public function m20(): int\n    {\n        return 'x20';\n    }\n\n    public function m21(): int\n    {\n        return 'x21';\n    }\n\n    public function m22(): int\n    {\n        return 'x22';\n    }\n\n    public function m23(): int\n    {\n        return 'x23';\n    }\n\n    public function m24(): int\n    {\n        return 'x24';\n    }\n\n    public function m25(): int\n    {\n        return 'x25';\n    }\n\n    public function m26(): int\n    {\n        return 'x26';\n    }\n\n    public function m27(): int\n    {\n        return 'x27';\n    }\n\n    public function m28(): int\n    {\n        return 'x28';\n    }\n\n    public function m29(): int\n    {\n        return 'x29';\n    }\n\n    public function m30(): int\n    {\n        return 'x30';\n    }\n}\n"
+  },
+  "tool_response": {
+    "filePath": "{{ROOT}}/app/Support/E6Tanti.php",
+    "success": true
+  },
+  "tool_use_id": "toolu_replay"
+}
