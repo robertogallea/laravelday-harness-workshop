@@ -1,0 +1,94 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/*
+ * .harness/bin/session-start — SessionStart, uguale per Claude Code e Codex. Fallisce aperto.
+ *
+ * A ogni avvio, ripresa, /clear o compattazione:
+ *   1. crea o riprende lo stato della sessione (run, commit base) e ci salva il transcript;
+ *      dopo /clear, compact o resume con un session_id nuovo lo eredita dalla sessione precedente;
+ *   2. scrive l'heartbeat (.harness/state/heartbeat.json): la prova, per doctor, che l'agente
+ *      esegue davvero gli hook (su Codex vuol dire che sono stati approvati in /hooks);
+ *   3. mette nel contesto dell'agente il task attivo, gli avvisi (ultima run NON VERIFICATO o in
+ *      escalation, Progress di un altro task) e Progress, troncato per ultimo.
+ * Il contesto è un aiuto: AGENTS.md punta comunque alla memoria. Un errore → session.error.
+ */
+
+namespace Harness;
+
+$p = $root = null;
+try {
+    require __DIR__.'/../lib/harness.php';
+    require __DIR__.'/../lib/receipt.php';
+    $root = root_from(__DIR__);
+    $p = Payload::fromStdin($argv, $root);
+    $source = (string) ($p->raw['source'] ?? '');
+    if (in_array($source, ['clear', 'compact', 'resume'], true)) {
+        State::inherit($root, $p->sessionId); // stesso lavoro, session_id nuovo
+    }
+    $state = State::load($root, $p->sessionId);
+    $state['transcript_path'] = $p->raw['transcript_path'] ?? ($state['transcript_path'] ?? null);
+    State::save($root, $p->sessionId, $state);
+    State::heartbeat($root, $p->agent, ['source' => $source, 'session' => $p->sessionId]);
+    $config = require $root.'/.harness/config.php';
+    $list = fn (array $xs) => $xs === [] ? '—' : implode(', ', $xs);
+
+    $out = ["[harness] Contesto della sessione (run {$state['run']})."];
+    $warnings = [];
+    try {
+        $task = active_task($root);
+    } catch (\Throwable $e) {
+        $task = null;
+        $warnings[] = '⚠ '.$e->getMessage().': l\'umano deve lasciarne approved uno solo. Fino ad allora il guard nega le scritture.';
+    }
+    if ($task !== null) {
+        $out[] = "Task attivo: {$task['id']} «".task_title($task)."» — {$task['_path']} (approved, non modificarlo).";
+        $out[] = '- scope.paths: '.$list(list_of($task['scope']['paths'] ?? []));
+        $out[] = '- must_not_change: '.$list(list_of($task['must_not_change'] ?? []));
+        $out[] = '- evidence: '.$list(list_of($task['evidence'] ?? []));
+        $out[] = 'Prima di lasciarti chiudere, lo stop esegue i test mirati e le evidence e scrive il Change Receipt: con un rosso non ti lascia dire "fatto". '
+            ."Se ti serve una decisione umana, chiudi il messaggio con {$config['waiting_marker']}: <domanda>.";
+    } elseif ($warnings === []) {
+        $drafts = array_map(fn ($f) => basename($f, '.md'), array_filter(glob(tasks_dir($root).'/T-*.md') ?: [], fn ($f) => (read_task($f)['status'] ?? null) === 'draft'));
+        $out[] = 'Nessun Task Contract approvato. Prima di scrivere in '.implode(', ', list_of($config['gated_paths'])).' abbozzane uno in .harness/tasks/ '
+            .'(status: draft, skill task-contract) e chiedi all\'umano di approvarlo.'.($drafts ? ' Bozze presenti: '.implode(', ', $drafts).'.' : '');
+    }
+
+    // Progress: da qui riparte il lavoro. Lo stop controlla che sia del task attivo e aggiornato.
+    $progress = $root.'/.harness/memory/progress.md';
+    $progressLines = [];
+    if (is_file($progress)) {
+        $pr = read_task($progress);
+        $body = trim((string) preg_replace('/<!--.*?-->/s', '', (string) ($pr['_body'] ?? file_get_contents($progress))));
+        $progressLines[] = '';
+        $progressLines[] = 'Progress (.harness/memory/progress.md, task '.($pr['task'] ?? '—').', updated '.($pr['updated'] ?? '—').'; aggiornalo prima di chiudere con la skill progress):';
+        $progressLines[] = mb_strlen($body) > 900 ? mb_substr($body, 0, 899).'…' : $body;
+        if ($task !== null && ($pr['task'] ?? null) !== $task['id']) {
+            $warnings[] = "⚠ progress.md parla di ".($pr['task'] ?? 'nessun task').", non del task attivo {$task['id']}.";
+        }
+    }
+
+    // L'ultima verifica è finita male? Lo dice l'ultimo receipt, anche della run in corso (resume, compact).
+    $runs = glob(dirname(run_dir($root, 'x')).'/*/receipt.md') ?: [];
+    usort($runs, fn ($a, $b) => filemtime($b) <=> filemtime($a));
+    if ($runs !== [] && preg_match('/^# Change Receipt — .*(NON VERIFICATO|ESCALATION)/m', (string) file_get_contents($runs[0]), $m)) {
+        $warnings[] = '⚠ L\'ultimo receipt (run '.basename(dirname($runs[0])).") è {$m[1]}: leggi .harness/runs/".basename(dirname($runs[0])).'/receipt.md'
+            .($m[1] === 'NON VERIFICATO' ? ' e rilancia la verifica con php .harness/bin/receipt.' : ' e chiedi all\'umano come procedere.');
+    }
+    // Gli avvisi prima di Progress: se il contesto va troncato, si perde la coda di Progress, non un avviso.
+    $out = [...$out, ...($warnings ? ['', ...$warnings] : []), ...$progressLines];
+
+    trace($p, 'session.started', ['source' => $source, 'task' => $task['id'] ?? null, 'base' => $state['base']]);
+    Out::context('SessionStart', implode("\n", $out), 2000);
+} catch (\Throwable $e) {
+    try {
+        if ($root !== null && class_exists(__NAMESPACE__.'\Payload')) {
+            $p ??= Payload::fromArray([], $root);
+            trace($p, 'session.error', ['message' => mb_substr($e->getMessage(), 0, 300)]);
+        }
+    } catch (\Throwable) {
+    }
+}
+exit(0);

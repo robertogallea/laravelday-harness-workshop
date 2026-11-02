@@ -1,0 +1,16 @@
+{
+  "_expect": "allow",
+  "_trap": "gate (tests/ non è gated)",
+  "_task": "none",
+  "session_id": "replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "{{ROOT}}/tests/Feature/Refunds/PartialRefundTest.php",
+    "content": "<?php\n\nit('rimborsa una parte', function () {})->group('REFUND-INV-2');\n"
+  },
+  "tool_use_id": "toolu_replay"
+}

@@ -1,0 +1,17 @@
+{
+  "_expect": "allow",
+  "_trap": "lettura libera (2>/dev/null non è una scrittura)",
+  "_task": "none",
+  "session_id": "replay",
+  "turn_id": "turn-replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-replay",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "grep -n Conflicts AGENTS.md 2>/dev/null"
+  },
+  "tool_use_id": "call-replay"
+}

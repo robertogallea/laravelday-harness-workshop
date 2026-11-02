@@ -1,0 +1,17 @@
+{
+  "_expect": "deny",
+  "_rule": "migration.destructive",
+  "_trap": "T4 (dropColumn in up())",
+  "_task": "fixture",
+  "session_id": "replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "{{ROOT}}/database/migrations/2026_11_14_090000_allow_partial_refunds.php",
+    "content": "<?php\n\nuse Illuminate\\Database\\Migrations\\Migration;\nuse Illuminate\\Database\\Schema\\Blueprint;\nuse Illuminate\\Support\\Facades\\Schema;\n\nreturn new class extends Migration\n{\n    public function up(): void\n    {\n        Schema::table('refunds', function (Blueprint $table) {\n            $table->unsignedInteger('amount_cents')->default(0);\n            $table->dropColumn('amount');\n        });\n    }\n\n    public function down(): void\n    {\n        Schema::table('refunds', function (Blueprint $table) {\n            $table->decimal('amount', 8, 2)->default(0);\n            $table->dropColumn('amount_cents');\n        });\n    }\n};\n"
+  },
+  "tool_use_id": "toolu_replay"
+}

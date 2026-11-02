@@ -1,0 +1,120 @@
+{
+  "session_id": "replay-claude",
+  "transcript_path": "/tmp/replay-transcript.jsonl",
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "Fatto: rimborso parziale implementato, test verdi.",
+  "_verification": {
+    "changed": [
+      {
+        "path": "app/Actions/Refunds/RefundOrderPartially.php",
+        "added": 54,
+        "removed": 0
+      },
+      {
+        "path": "tests/Feature/Refunds/PartialRefundTest.php",
+        "added": 118,
+        "removed": 0
+      },
+      {
+        "path": ".harness/memory/progress.md",
+        "added": 6,
+        "removed": 6
+      }
+    ],
+    "selection": {
+      "how": "convention",
+      "boot": "ok",
+      "necromancer": "assente",
+      "files": [
+        "tests/Feature/Refunds/PartialRefundTest.php"
+      ]
+    },
+    "tests": {
+      "tests": 11,
+      "failed": 1,
+      "failures": [
+        "PartialRefundTest > it refunds only once with the same Idempotency-Key"
+      ]
+    },
+    "evidence": [
+      {
+        "command": "vendor/bin/pest --group=REFUND-INV-5",
+        "exit": 1,
+        "tests": 2,
+        "failed": 1,
+        "failures": [
+          "PartialRefundTest > it refunds only once with the same Idempotency-Key"
+        ],
+        "ms": 430
+      },
+      {
+        "command": "vendor/bin/pest",
+        "exit": 1,
+        "tests": 34,
+        "failed": 1,
+        "failures": [
+          "PartialRefundTest > it refunds only once with the same Idempotency-Key"
+        ],
+        "ms": 900
+      }
+    ],
+    "invariants": {
+      "ids": [
+        "REFUND-INV-1",
+        "REFUND-INV-2",
+        "REFUND-INV-3",
+        "REFUND-INV-4",
+        "REFUND-INV-5",
+        "REFUND-INV-6"
+      ],
+      "rows": [
+        {
+          "id": "REFUND-INV-1",
+          "tests": 2,
+          "outcome": "verde"
+        },
+        {
+          "id": "REFUND-INV-2",
+          "tests": 2,
+          "outcome": "verde"
+        },
+        {
+          "id": "REFUND-INV-3",
+          "tests": 2,
+          "outcome": "verde"
+        },
+        {
+          "id": "REFUND-INV-4",
+          "tests": 2,
+          "outcome": "verde"
+        },
+        {
+          "id": "REFUND-INV-5",
+          "tests": 2,
+          "outcome": "verde"
+        },
+        {
+          "id": "REFUND-INV-6",
+          "tests": 2,
+          "outcome": "verde"
+        }
+      ],
+      "todo": false
+    },
+    "progress": {
+      "task": "T-fixture",
+      "fresh": true,
+      "problem": null
+    }
+  },
+  "_expect": "stop.escalated",
+  "_state": {
+    "attempts": 2
+  },
+  "_contains": [
+    "ESCALATION",
+    "3/3"
+  ]
+}

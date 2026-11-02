@@ -1,0 +1,10 @@
+{
+  "session_id": "replay-claude",
+  "transcript_path": "/tmp/replay-transcript.jsonl",
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "Fatto: rimborso parziale implementato, test verdi.",
+  "_verification": "verifica rotta: non è un oggetto",
+  "_expect": "stop.error"
+}

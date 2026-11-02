@@ -1,0 +1,7 @@
+{
+  "_expect": "deny",
+  "_rule": "fail-closed",
+  "_trap": "fail-closed",
+  "_task": "fixture",
+  "_stdin": "{\"session_id\": \"replay\", \"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": "
+}

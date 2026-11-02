@@ -1,0 +1,17 @@
+{
+  "session_id": "replay-claude",
+  "transcript_path": "/tmp/replay-transcript.jsonl",
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "SessionStart",
+  "source": "startup",
+  "model": "claude-opus-5-5",
+  "_expect": "session.started",
+  "_contains": [
+    "T-fixture",
+    "scope",
+    "must_not_change",
+    "evidence",
+    "progress.md",
+    "[ATTESA-UMANO]"
+  ]
+}

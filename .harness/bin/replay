@@ -1,0 +1,313 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/*
+ * php .harness/bin/replay <fixture.json>... [--hook=…]  un payload alla volta
+ * php .harness/bin/replay --all [--hook=pre-tool]       tutte le fixture di .harness/fixtures/<hook>/
+ *   --hook=pre-tool|post-edit|stop|session-start   l'hook da chiamare (default pre-tool)
+ *   --keep-state  una sola sessione per tutte le fixture: lo stop vede i tentativi precedenti
+ *   --json        una riga JSON per fixture (la leggono i verify)
+ *   --verbose     stampa anche il motivo, il messaggio e l'evento di trace
+ *
+ * Passa il payload all'hook come sottoprocesso, su stdin, esattamente come farebbe
+ * l'agente, e confronta l'esito con `_expect`:
+ *   pre-tool         allow | deny, più `_rule` (l'id della regola che deve negare:
+ *                    un deny della regola sbagliata è un FAIL);
+ *   stop, session-*  l'evento di trace atteso (stop.blocked, stop.escalated, session.started, …),
+ *                    più `_contains` (testi che il reason, il systemMessage o il contesto devono contenere);
+ *   post-edit        l'evento (post_edit.checked), `_commands` (quanti comandi ha chiesto commandsFor),
+ *                    `_context` (true/false: l'agente riceve un additionalContext?) e `_contains`.
+ *                    Il contesto deve stare nei 1500 caratteri da solo: se lo tronca l'impianto è un FAIL.
+ * Per lo stop `_verification` è una verifica precalcolata (lo stop non esegue test né git:
+ * HARNESS_STOP_DRY) e `_state` imposta lo stato della sessione, per esempio i tentativi già fatti.
+ *
+ * Isolamento: il contract è quello di fixture (.harness/fixtures/tasks/), oppure nessuno
+ * con `"_task": "none"`; stato e trace finiscono in una cartella temporanea. Il tuo
+ * T-001, .harness/state e .harness/runs non vengono toccati.
+ * `{{ROOT}}` nella fixture diventa la root del progetto; `_stdin` sostituisce il payload
+ * (per i JSON illeggibili). `_env` aggiunge variabili d'ambiente all'hook (un valore non stringa
+ * diventa JSON). `_files` ({"app/X.php": "samples/x.php"}, sorgente relativa alla fixture) mette
+ * dei file campione nel progetto per la durata del replay: il post-edit li analizza davvero.
+ * Un file che esiste già non viene mai sovrascritto. Exit 0 = tutte PASS, 1 = almeno un FAIL, 2 = uso sbagliato.
+ */
+
+require __DIR__.'/../lib/harness.php';
+
+use function Harness\root_from;
+
+$root = root_from(__DIR__);
+$opts = ['all' => false, 'hook' => 'pre-tool', 'json' => false, 'verbose' => false, 'keep-state' => false];
+$files = [];
+foreach (array_slice($argv, 1) as $a) {
+    if (preg_match('/^--(all|json|verbose|keep-state)$/', $a, $m)) {
+        $opts[$m[1]] = true;
+    } elseif (preg_match('/^--hook=([\w-]+)$/', $a, $m)) {
+        $opts['hook'] = $m[1];
+    } elseif (! str_starts_with($a, '--')) {
+        $files[] = $a;
+    } else {
+        fwrite(STDERR, "Opzione sconosciuta: {$a}\n");
+        exit(2);
+    }
+}
+if ($opts['all']) {
+    $files = glob("{$root}/.harness/fixtures/{$opts['hook']}/*.json") ?: [];
+}
+if ($files === []) {
+    fwrite(STDERR, "Uso: php .harness/bin/replay --all [--hook=pre-tool|post-edit|stop|session-start] [--json] [--verbose]\n     php .harness/bin/replay [--hook=…] [--keep-state] <fixture.json>...\n");
+    exit(2);
+}
+$hook = "{$root}/.harness/bin/{$opts['hook']}";
+if (! is_file($hook)) {
+    fwrite(STDERR, "Manca l'hook {$opts['hook']}: .harness/bin/{$opts['hook']}\n");
+    exit(2);
+}
+
+$tmp = sys_get_temp_dir().'/harness-replay-'.getmypid().'-'.bin2hex(random_bytes(3));
+mkdir($tmp, 0777, true);
+$pass = 0;
+try {
+    foreach ($files as $i => $file) {
+        $r = replay_one($root, $opts['hook'], $hook, $file, $opts['keep-state'] ? "{$tmp}/0" : "{$tmp}/{$i}");
+        $pass += $r['pass'] ? 1 : 0;
+        if ($opts['json']) {
+            echo json_encode($r, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), PHP_EOL;
+            continue;
+        }
+        if ($opts['keep-state']) {
+            // Una sequenza nella stessa sessione: conta l'esito di ogni passo, non le attese della fixture.
+            printf("  %-4s  %-36s %s\n", '#'.($i + 1), $r['name'], $r['got']);
+            echo '        '.one_line($r['reason']), PHP_EOL;
+            continue;
+        }
+        $want = $r['expect'].($r['rule'] ? " [{$r['rule']}]" : '').($r['missing'] ? ' con «'.implode('», «', $r['missing']).'»' : '');
+        $got = $r['got'].($r['got_rule'] ? " [{$r['got_rule']}]" : '').($r['problems'] ? ': '.implode('; ', $r['problems']) : '');
+        printf("  %-4s  %-36s %s\n", $r['pass'] ? 'PASS' : 'FAIL', $r['name'], $r['pass'] ? $got : "atteso {$want}, ottenuto {$got}");
+        if (! $r['pass'] || $opts['verbose']) {
+            foreach (array_filter([$r['reason'], $r['trace'] ? 'trace: '.$r['trace'] : '']) as $line) {
+                echo '        '.one_line($line), PHP_EOL;
+            }
+        }
+    }
+} finally {
+    exec('rm -rf '.escapeshellarg($tmp));
+}
+
+$total = count($files);
+if ($opts['keep-state']) {
+    exit(0);
+}
+if (! $opts['json']) {
+    echo PHP_EOL, "{$pass}/{$total} PASS", PHP_EOL;
+}
+exit($pass === $total ? 0 : 1);
+
+// ---------------------------------------------------------------------------
+
+/** @return array{name: string, pass: bool, expect: string, rule: ?string, got: string, got_rule: ?string, missing: list<string>, problems: list<string>, exit: int, reason: string, trace: string} */
+function replay_one(string $root, string $hookName, string $hook, string $file, string $sandbox): array
+{
+    $name = basename($file, '.json');
+    $fx = json_decode(str_replace('{{ROOT}}', addcslashes($root, '"\\/'), (string) file_get_contents($file)), true);
+    if (! is_array($fx)) {
+        return ['name' => $name, 'pass' => false, 'expect' => '?', 'rule' => null, 'got' => 'fixture illeggibile', 'got_rule' => null, 'missing' => [], 'problems' => [], 'exit' => -1, 'reason' => $file, 'trace' => ''];
+    }
+    $expect = (string) ($fx['_expect'] ?? ($hookName === 'pre-tool' ? 'allow' : '?'));
+    $rule = isset($fx['_rule']) ? (string) $fx['_rule'] : null;
+    $stdin = isset($fx['_stdin'])
+        ? (string) $fx['_stdin']
+        : json_encode(array_filter($fx, fn ($k) => ! str_starts_with((string) $k, '_'), ARRAY_FILTER_USE_KEY), JSON_UNESCAPED_SLASHES);
+
+    if (! is_dir($sandbox.'/state')) {
+        mkdir($sandbox.'/state', 0777, true);
+    }
+    $env = getenv() + [];
+    $env['HARNESS_STATE_DIR'] = $sandbox.'/state';
+    $env['HARNESS_RUNS_DIR'] = $sandbox.'/runs';
+    $env['HARNESS_TASKS'] = ($fx['_task'] ?? 'fixture') === 'none' ? $sandbox.'/no-tasks' : $root.'/.harness/fixtures/tasks';
+    unset($env['HARNESS_STOP_DRY'], $env['HARNESS_TOOLS']);
+    foreach ((array) ($fx['_env'] ?? []) as $k => $v) {
+        $env[(string) $k] = is_string($v) ? $v : json_encode($v, JSON_UNESCAPED_SLASHES);
+    }
+    if (array_key_exists('_verification', $fx)) {
+        file_put_contents($sandbox.'/verification.json', json_encode($fx['_verification'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        $env['HARNESS_STOP_DRY'] = $sandbox.'/verification.json';
+    }
+    if (is_array($fx['_state'] ?? null)) {
+        $sf = $sandbox.'/state/'.preg_replace('/[^\w.-]/', '_', (string) ($fx['session_id'] ?? 'no-session')).'.json';
+        $old = is_file($sf) ? json_decode((string) file_get_contents($sf), true) : null;
+        $seed = ['run' => 'replay-'.$name, 'base' => null, 'dirty' => [], 'started_at' => time(), 'attempts' => 0, 'last' => null];
+        file_put_contents($sf, json_encode(array_replace($seed, is_array($old) ? $old : [], $fx['_state']), JSON_UNESCAPED_SLASHES));
+    }
+    $before = trace_lines($sandbox);
+
+    $placed = [];
+    try {
+        foreach ((array) ($fx['_files'] ?? []) as $target => $source) {
+            $placed = [...$placed, ...place_sample($root, (string) $target, dirname($file).'/'.$source)];
+        }
+        $p = proc_open([PHP_BINARY, $hook], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $root, $env);
+        fwrite($pipes[0], $stdin);
+        fclose($pipes[0]);
+        $out = (string) stream_get_contents($pipes[1]);
+        $err = (string) stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exit = proc_close($p);
+    } catch (RuntimeException $e) {
+        return ['name' => $name, 'pass' => false, 'expect' => $expect, 'rule' => null, 'got' => 'fixture non eseguibile', 'got_rule' => null, 'missing' => [], 'problems' => [], 'exit' => -1, 'reason' => $e->getMessage(), 'trace' => ''];
+    } finally {
+        // Prima i file, poi le cartelle create per loro (dalla più profonda).
+        foreach (array_reverse($placed) as $made) {
+            is_dir($made) ? @rmdir($made) : @unlink($made);
+        }
+    }
+
+    $new = array_slice(trace_lines($sandbox), count($before));
+    $trace = implode("\n", $new);
+    $json = json_decode($out, true);
+
+    if ($hookName === 'pre-tool') {
+        $decision = is_array($json) ? ($json['hookSpecificOutput']['permissionDecision'] ?? null) : null;
+        $reason = is_array($json) ? (string) ($json['hookSpecificOutput']['permissionDecisionReason'] ?? '') : '';
+        [$got, $gotRule] = match (true) {
+            $exit === 2 => ['deny', 'fail-closed'],
+            $exit === 0 && $decision === 'deny' => ['deny', preg_match('/^\[harness:([\w.-]+)\]/', $reason, $m) ? $m[1] : null],
+            $exit === 0 && trim($out) === '' => ['allow', null],
+            default => ['errore', null],
+        };
+        if ($exit === 2) {
+            $reason = trim($err);
+        } elseif ($got === 'errore') {
+            $reason = "exit {$exit}: ".trim($out.' '.$err);
+        }
+
+        return [
+            'name' => $name,
+            'pass' => $got === $expect && ($expect !== 'deny' || $rule === null || $rule === $gotRule),
+            'expect' => $expect, 'rule' => $rule, 'got' => $got, 'got_rule' => $gotRule, 'missing' => [], 'problems' => [],
+            'exit' => $exit, 'reason' => $reason, 'trace' => $trace,
+        ];
+    }
+
+    // post-edit, stop e session-start: l'esito è l'evento di trace; l'output deve essere quello che l'agente si aspetta.
+    $last = $new === [] ? [] : (json_decode((string) end($new), true) ?: []);
+    $event = (string) ($last['event'] ?? 'nessun evento');
+    $reason = is_array($json) ? (string) ($json['reason'] ?? $json['systemMessage'] ?? $json['hookSpecificOutput']['additionalContext'] ?? '') : '';
+    $valid = match ($hookName) {
+        // Lo stop risponde sempre con un oggetto JSON (Codex lo vuole), e blocca solo con stop.blocked.
+        'stop' => $exit === 0 && is_array($json) && (($json['decision'] ?? null) === 'block') === ($event === 'stop.blocked'),
+        default => $exit === 0 && (trim($out) === '' || is_array($json)),
+    };
+    $got = $valid ? $event : "errore ({$event})";
+    if (! $valid) {
+        $reason = "exit {$exit}: ".trim($out.' '.$err);
+    }
+    $missing = array_values(array_filter((array) ($fx['_contains'] ?? []), fn ($t) => ! str_contains($reason, (string) $t)));
+    // Prima di cercare l'errore nelle regole: gli strumenti sono partiti davvero? Se no, anche un "pulito" è un FAIL.
+    $problems = $hookName === 'post-edit' && $valid ? [...tools_not_started($fx, $last), ...post_edit_problems($fx, $last, $reason)] : [];
+
+    return [
+        'name' => $name, 'pass' => $got === $expect && $missing === [] && $problems === [],
+        'expect' => $expect, 'rule' => null, 'got' => $got, 'got_rule' => null, 'missing' => $missing, 'problems' => $problems,
+        'exit' => $exit, 'reason' => $reason, 'trace' => $trace,
+    ];
+}
+
+/** @return list<string> cosa non torna in un post-edit: i comandi chiesti e il contesto per l'agente */
+function post_edit_problems(array $fx, array $event, string $context): array
+{
+    $problems = [];
+    $commands = $event['commands'] ?? null;
+    if (isset($fx['_commands']) && $commands !== (int) $fx['_commands']) {
+        $problems[] = "commandsFor ha chiesto {$commands} comandi, attesi {$fx['_commands']}";
+    }
+    if (($fx['_context'] ?? null) === true && $context === '') {
+        $problems[] = 'nessun additionalContext: feedback() ha restituito null';
+    }
+    if (($fx['_context'] ?? null) === false && $context !== '') {
+        $problems[] = 'additionalContext inatteso (qui feedback() deve restituire null)';
+    }
+    if (str_ends_with($context, '(troncato)')) {
+        $problems[] = 'feedback() supera i 1500 caratteri: il taglio dell\'impianto perde la coda';
+    }
+
+    return $problems;
+}
+
+/**
+ * Gli strumenti che il post-edit non ha potuto lanciare (campo `skipped` del trace), tranne quelli
+ * che la fixture fa mancare apposta con HARNESS_TOOLS. Senza vendor/ il motivo dei FAIL non è
+ * feedback(): lo si dice per primo, e un file "pulito" che nessuno ha controllato non passa.
+ *
+ * @return list<string>
+ */
+function tools_not_started(array $fx, array $event): array
+{
+    $apposta = array_keys((array) ($fx['_env']['HARNESS_TOOLS'] ?? []));
+    $per = ['missing' => [], 'timeout' => []];
+    foreach ((array) ($event['skipped'] ?? []) as $s) {
+        [$tool, $why] = explode(': ', (string) $s, 2) + ['', ''];
+        if (isset($per[$why]) && ! in_array($tool, $apposta, true)) {
+            $per[$why][] = $tool;
+        }
+    }
+    $out = [];
+    if ($per['missing'] !== []) {
+        $out[] = 'non sono partiti '.implode(' e ', $per['missing']).': manca vendor/bin/… nel tuo progetto, non è feedback(). composer install, poi php .harness/bin/doctor';
+    }
+    if ($per['timeout'] !== []) {
+        $out[] = implode(' e ', $per['timeout']).' in timeout: macchina lenta o PHPStan senza cache, rilancia il replay';
+    }
+
+    return $out;
+}
+
+/**
+ * Mette un file campione nel progetto. Mai sopra un file che esiste.
+ *
+ * @return list<string> le cartelle create e il file, nell'ordine: replay li toglie a rovescio
+ */
+function place_sample(string $root, string $target, string $source): array
+{
+    if ($target === '' || str_contains($target, '..') || ! is_file($source)) {
+        throw new RuntimeException("_files: {$target} ← {$source} non valido");
+    }
+    if (file_exists($root.'/'.$target)) {
+        throw new RuntimeException("_files: {$target} esiste già nel progetto, non lo sovrascrivo (spostalo e rilancia)");
+    }
+    $made = [];
+    $dir = dirname($root.'/'.$target);
+    $missing = [];
+    for ($d = $dir; ! is_dir($d); $d = dirname($d)) {
+        array_unshift($missing, $d);
+    }
+    foreach ($missing as $d) {
+        mkdir($d);
+        $made[] = $d;
+    }
+    copy($source, $root.'/'.$target);
+    $made[] = $root.'/'.$target;
+
+    return $made;
+}
+
+/** @return list<string> le righe di trace scritte finora nella sandbox */
+function trace_lines(string $sandbox): array
+{
+    $lines = [];
+    foreach (glob($sandbox.'/runs/*/trace.jsonl') ?: [] as $f) {
+        array_push($lines, ...array_filter(explode("\n", (string) file_get_contents($f)), 'strlen'));
+    }
+
+    return $lines;
+}
+
+function one_line(string $s): string
+{
+    $s = preg_replace('/\s+/', ' ', trim($s)) ?? '';
+
+    return mb_strlen($s) > 160 ? mb_substr($s, 0, 159).'…' : $s;
+}

@@ -1,0 +1,84 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/*
+ * .harness/bin/pre-tool — guard PreToolUse, uguale per Claude Code e Codex.
+ *
+ * FALLISCE CHIUSO: qualunque errore (eccezione, warning, fatal, JSON illeggibile, più
+ * contract approvati) → stderr + exit 2, cioè azione bloccata in entrambi gli agenti.
+ * Su Claude c'è anche "onFailure": "block" (timeout compreso); su Codex la garanzia sta qui.
+ *
+ * Qui c'è solo l'impianto. La policy sta in .harness/rules/guard.php: la prima regola
+ * che nega vince, e il suo id finisce nel motivo ([harness:<id>]) e nel trace.
+ * Un evento di trace per chiamata: pre_tool.allowed | pre_tool.denied | pre_tool.error.
+ */
+
+namespace Harness;
+
+set_error_handler(function (int $no, string $msg, string $file, int $line): bool {
+    if (! (error_reporting() & $no)) {
+        return false; // rispetta l'operatore @
+    }
+    throw new \ErrorException($msg, 0, $no, $file, $line); // anche un warning blocca
+});
+register_shutdown_function(function (): void {
+    $e = error_get_last();
+    if ($e !== null && in_array($e['type'], [E_ERROR, E_PARSE, E_COMPILE_ERROR, E_CORE_ERROR], true)) {
+        fwrite(STDERR, "[harness:fail-closed] errore fatale nel guard, azione bloccata: {$e['message']}\n");
+        exit(2);
+    }
+});
+
+$p = null;
+try {
+    require __DIR__.'/../lib/harness.php';
+
+    $root = root_from(__DIR__);
+    $p = Payload::fromStdin($argv, $root);
+    if ($p->toolName === '') {
+        throw new \RuntimeException('payload PreToolUse senza tool_name');
+    }
+    $config = require $root.'/.harness/config.php';
+    $state = State::load($root, $p->sessionId);
+    $cwd = is_string($p->raw['cwd'] ?? null) && $p->raw['cwd'] !== '' ? $p->raw['cwd'] : $root;
+
+    // Path che un comando shell potrebbe scrivere (euristica: > >>, sed -i, tee, rm, mv, cp, …).
+    $shellWrites = $p->tool === 'shell' ? shell_write_targets($p->command, $root, $cwd) : [];
+
+    $ctx = [
+        'config' => $config,
+        // Il task si carica solo se qualcosa scrive: un contract rotto non blocca le letture.
+        'task' => $p->writes() === [] && $shellWrites === [] ? null : active_task($root),
+        'base' => $state['base'],
+        // "Esisteva al commit base" = migrazione già eseguita. Senza git si guarda il disco (prudente).
+        'tracked' => fn (string $path): bool => $state['base'] === null
+            ? is_file($root.'/'.$path)
+            : trim((string) shell_exec(sprintf('git -C %s cat-file -e %s 2>&1 && echo ok', escapeshellarg($root), escapeshellarg($state['base'].':'.$path)))) === 'ok',
+        'shell_writes' => $shellWrites,
+    ];
+
+    $rules = require $root.'/.harness/rules/guard.php';
+    foreach ($rules as $id => $rule) {
+        $reason = $rule($p, $ctx);
+        if ($reason === null) {
+            continue;
+        }
+        trace($p, 'pre_tool.denied', [
+            'rule' => $id,
+            'tool' => $p->toolName,
+            'files' => $p->writes() ?: ($p->paths() ?: $ctx['shell_writes']),
+            'command' => mb_substr($p->command, 0, 200),
+        ]);
+        Out::deny("[harness:{$id}] {$reason}");
+    }
+
+    trace($p, 'pre_tool.allowed', ['tool' => $p->toolName, 'files' => $p->paths(), 'command' => mb_substr($p->command, 0, 200)]);
+    Out::pass('PreToolUse');
+} catch (\Throwable $e) {
+    if ($p instanceof Payload) {
+        trace($p, 'pre_tool.error', ['tool' => $p->toolName, 'message' => mb_substr($e->getMessage(), 0, 300)]);
+    }
+    Out::failClosed($e);
+}

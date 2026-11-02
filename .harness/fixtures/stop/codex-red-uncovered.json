@@ -1,0 +1,113 @@
+{
+  "session_id": "replay-codex",
+  "turn_id": "turn-1",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "Stop",
+  "model": "gpt-5.6-terra",
+  "stop_hook_active": false,
+  "last_assistant_message": "Ho finito: il rimborso parziale è pronto.",
+  "_verification": {
+    "changed": [
+      {
+        "path": "app/Actions/Refunds/RefundOrderPartially.php",
+        "added": 54,
+        "removed": 0
+      },
+      {
+        "path": "tests/Feature/Refunds/PartialRefundTest.php",
+        "added": 118,
+        "removed": 0
+      },
+      {
+        "path": ".harness/memory/progress.md",
+        "added": 6,
+        "removed": 6
+      }
+    ],
+    "selection": {
+      "how": "convention",
+      "boot": "ok",
+      "necromancer": "assente",
+      "files": [
+        "tests/Feature/Refunds/PartialRefundTest.php"
+      ]
+    },
+    "tests": {
+      "tests": 11,
+      "failed": 0,
+      "failures": []
+    },
+    "evidence": [
+      {
+        "command": "vendor/bin/pest --group=REFUND-INV-6",
+        "exit": 1,
+        "tests": 0,
+        "failed": 0,
+        "failures": [],
+        "ms": 300
+      },
+      {
+        "command": "vendor/bin/pest",
+        "exit": 0,
+        "tests": 34,
+        "failed": 0,
+        "failures": [],
+        "ms": 900
+      }
+    ],
+    "invariants": {
+      "ids": [
+        "REFUND-INV-1",
+        "REFUND-INV-2",
+        "REFUND-INV-3",
+        "REFUND-INV-4",
+        "REFUND-INV-5",
+        "REFUND-INV-6"
+      ],
+      "rows": [
+        {
+          "id": "REFUND-INV-1",
+          "tests": 2,
+          "outcome": "verde"
+        },
+        {
+          "id": "REFUND-INV-2",
+          "tests": 2,
+          "outcome": "verde"
+        },
+        {
+          "id": "REFUND-INV-3",
+          "tests": 2,
+          "outcome": "verde"
+        },
+        {
+          "id": "REFUND-INV-4",
+          "tests": 2,
+          "outcome": "verde"
+        },
+        {
+          "id": "REFUND-INV-5",
+          "tests": 2,
+          "outcome": "verde"
+        },
+        {
+          "id": "REFUND-INV-6",
+          "tests": 0,
+          "outcome": "non coperta"
+        }
+      ],
+      "todo": false
+    },
+    "progress": {
+      "task": "T-fixture",
+      "fresh": true,
+      "problem": null
+    }
+  },
+  "_expect": "stop.blocked",
+  "_contains": [
+    "REFUND-INV-6",
+    "1/3"
+  ]
+}

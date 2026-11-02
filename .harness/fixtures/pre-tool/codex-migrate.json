@@ -1,0 +1,17 @@
+{
+  "_expect": "allow",
+  "_trap": "T4 (migrate in avanti è ammesso)",
+  "_task": "none",
+  "session_id": "replay",
+  "turn_id": "turn-replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-replay",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "php artisan migrate"
+  },
+  "tool_use_id": "call-replay"
+}

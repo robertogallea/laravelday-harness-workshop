@@ -1,0 +1,191 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/*
+ * php .harness/bin/receipt [T-NNN] [--base=<commit>] [--run=<id>] [--of=<branch>]
+ *
+ * Il Change Receipt, a mano: la stessa verifica che lo stop esegue prima del "fatto"
+ * (lib/receipt.php), senza budget né decisione. Scrive .harness/runs/<run>/receipt.md e
+ * metrics.json, e stampa il receipt.
+ *
+ *   T-NNN      il contract da dimostrare (default: il task approvato)
+ *   --base     il commit da cui misurare il diff (default: quello dell'ultima sessione
+ *              dell'agente, altrimenti HEAD)
+ *   --run      la cartella della run (default: quella dell'ultima sessione, altrimenti receipt-<ora>)
+ *   --of       il lavoro di un altro branch, misurato con l'harness e il contract di adesso.
+ *              Per esempio il receipt della run 1 nel Confronto: --of=run-1. Il diff del branch
+ *              (da dove si separa da HEAD) va su una copia del progetto in una cartella
+ *              temporanea, con vendor/ e .env: il working tree non si tocca.
+ *
+ * Exit: 0 verde, 1 rosso, 2 errore.
+ */
+
+namespace Harness;
+
+require __DIR__.'/../lib/harness.php';
+require __DIR__.'/../lib/receipt.php';
+
+$root = root_from(__DIR__);
+$taskId = $base = $run = $of = null;
+foreach (array_slice($argv, 1) as $a) {
+    if (preg_match('/^--base=(.+)$/', $a, $m)) {
+        $base = $m[1];
+    } elseif (preg_match('/^--run=([\w.-]+)$/', $a, $m)) {
+        $run = $m[1];
+    } elseif (preg_match('/^--of=(.+)$/', $a, $m)) {
+        $of = $m[1];
+    } elseif (preg_match('/^T-[\w-]+$/', $a)) {
+        $taskId = $a;
+    } else {
+        fwrite(STDERR, "Uso: php .harness/bin/receipt [T-NNN] [--base=<commit>] [--run=<id>] [--of=<branch>]\n");
+        exit(2);
+    }
+}
+
+$copy = null;
+try {
+    if ($of !== null && $base !== null) {
+        throw new \RuntimeException('--of e --base insieme: con --of il diff è quello del branch');
+    }
+    $config = require $root.'/.harness/config.php';
+    $work = $root;
+    $session = null;
+    if ($of !== null) {
+        [$work, $base] = $copy = copy_with_branch($root, $of);
+        $run ??= 'receipt-'.preg_replace('/[^\w.-]+/', '-', $of).'-'.date('Y-m-d\THi');
+    } else {
+        // L'ultima sessione dell'agente dà base, run e inizio (per la freschezza di Progress).
+        $sessions = array_filter(glob(State::dir($root).'/*.json') ?: [], fn ($f) => basename($f) !== 'heartbeat.json');
+        usort($sessions, fn ($a, $b) => filemtime($b) <=> filemtime($a));
+        $session = $sessions && $base === null ? json_decode((string) file_get_contents($sessions[0]), true) : null;
+        $session = is_array($session) && ! empty($session['base']) ? $session : null;
+    }
+
+    if ($taskId !== null) {
+        $file = tasks_dir($work)."/{$taskId}.md";
+        $task = read_task($file);
+        if ($task === []) {
+            throw new \RuntimeException(rel($work, $work, $file).' non esiste o non ha un frontmatter');
+        }
+        $task += ['_file' => $file, '_path' => ".harness/tasks/{$taskId}.md"];
+    } else {
+        $task = active_task($work) ?? throw new \RuntimeException('nessun Task Contract approvato: indica quale, per esempio php .harness/bin/receipt T-001');
+    }
+    $task['_title'] = task_title($task);
+
+    $ref = $base ?? $session['base'] ?? 'HEAD';
+    $sha = run(['git', 'rev-parse', '--verify', '--quiet', $ref.'^{commit}'], $work, 10);
+    if ($sha['exit'] !== 0) {
+        throw new \RuntimeException("--base={$ref}: non è un commit");
+    }
+    $base = trim($sha['out']);
+    $run ??= $session['run'] ?? 'receipt-'.date('Y-m-d\THi');
+    $runDir = run_dir($root, $run);
+
+    $changed = $session !== null ? session_changes($work, $session) : changed_files($work, $base);
+    $deadline = microtime(true) + (int) ($config['timeouts']['stop'] ?? 540);
+    $v = verification($work, $task, $base, $changed, $config, null, $session['started_at'] ?? null, $runDir, $deadline);
+    $verdict = failure_classes($v) === [] ? 'VERDE' : 'ROSSO';
+    $path = write_receipt($runDir, $v, ['run' => $run, 'agent' => $of === null ? 'cli' : "cli, --of={$of}", 'task' => $task, 'base' => $base, 'verdict' => $verdict,
+        'transcript_path' => $session['transcript_path'] ?? null]);
+    echo file_get_contents($path);
+    fwrite(STDERR, PHP_EOL.'Scritto in '.rel($root, $root, $path).' (e metrics.json)'.PHP_EOL);
+    $exit = $verdict === 'VERDE' ? 0 : 1;
+} catch (\Throwable $e) {
+    fwrite(STDERR, 'receipt: '.$e->getMessage().PHP_EOL);
+    $exit = 2;
+} finally {
+    if ($copy !== null) {
+        remove_copy($root, $copy[0]);
+    }
+}
+exit($exit);
+
+/**
+ * Una copia del progetto com'è adesso (worktree temporaneo; le modifiche non committate ai file
+ * tracciati comprese, con git stash create) con sopra il diff di $branch dal punto in cui si
+ * separa da HEAD: per la run 1 è il diff dell'agente su cp-00. vendor/ è una copia con hard
+ * link (un symlink farebbe caricare a Composer app/ dal progetto originale), .env una copia.
+ *
+ * @return array{0: string, 1: string} cartella e commit base (la fotografia del working tree)
+ */
+function copy_with_branch(string $root, string $branch): array
+{
+    $git = function (array $args, string $cwd, ?string $stdin = null) {
+        $r = run(['git', ...$args], $cwd, 120, $stdin);
+        if ($r['exit'] !== 0) {
+            throw new \RuntimeException('git '.implode(' ', $args).': '.one_line($r['err'] ?: $r['out']));
+        }
+
+        return trim($r['out']);
+    };
+    if (run(['git', 'rev-parse', '--verify', '--quiet', $branch.'^{commit}'], $root, 10)['exit'] !== 0) {
+        throw new \RuntimeException("--of={$branch}: il branch non c'è (la run 1 manca? php workshop/bin/fallback 1)");
+    }
+    // Il working tree com'è adesso (regole di E7 non ancora committate comprese), senza toccarlo.
+    $snapshot = $git(['stash', 'create'], $root) ?: $git(['rev-parse', 'HEAD'], $root);
+    $fork = $git(['merge-base', 'HEAD', $branch], $root);
+    $d = run(['git', 'diff', '--binary', '--no-renames', $fork, $branch], $root, 120); // niente trim: una patch finisce con il suo contesto
+    if ($d['exit'] !== 0) {
+        throw new \RuntimeException("git diff {$branch}: ".one_line($d['err']));
+    }
+    $diff = $d['out'];
+    if (trim($diff) === '') {
+        throw new \RuntimeException("{$branch} non ha modifiche rispetto a HEAD (merge-base ".substr($fork, 0, 7).')');
+    }
+
+    $dir = sys_get_temp_dir().'/receipt-of-'.bin2hex(random_bytes(4));
+    $git(['worktree', 'add', '--detach', '--quiet', $dir, $snapshot], $root);
+    try {
+        $r = run(['git', 'apply', '--3way', '--whitespace=nowarn'], $dir, 120, $diff);
+        if ($r['exit'] !== 0) {
+            $conflicts = array_filter(preg_split('/\R/', run(['git', 'diff', '--name-only', '--diff-filter=U'], $dir, 30)['out']) ?: []);
+            throw new \RuntimeException("il diff di {$branch} non si applica su HEAD".($conflicts ? ' (conflitti in '.implode(', ', $conflicts).')' : ': '.one_line($r['err'])));
+        }
+        hardlink_tree($root.'/vendor', $dir.'/vendor');
+        if (is_file($root.'/.env')) {
+            copy($root.'/.env', $dir.'/.env');
+        }
+    } catch (\Throwable $e) {
+        remove_copy($root, $dir);
+        throw $e;
+    }
+
+    return [$dir, $snapshot];
+}
+
+function hardlink_tree(string $from, string $to): void
+{
+    if (! is_dir($from)) {
+        return;
+    }
+    mkdir($to, 0777, true);
+    $items = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($from, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::SELF_FIRST);
+    foreach ($items as $item) {
+        $dest = $to.substr($item->getPathname(), strlen($from));
+        if ($item->isLink()) {
+            symlink((string) readlink($item->getPathname()), $dest);
+        } elseif ($item->isDir()) {
+            mkdir($dest);
+        } elseif (! @link($item->getPathname(), $dest)) {
+            copy($item->getPathname(), $dest);
+        }
+    }
+}
+
+/** Il worktree temporaneo, con quello che git non conosce (vendor/, .env). */
+function remove_copy(string $root, string $dir): void
+{
+    run(['git', 'worktree', 'remove', '--force', $dir], $root, 120);
+    if (! is_dir($dir)) {
+        return;
+    }
+    $items = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::CHILD_FIRST);
+    foreach ($items as $item) {
+        $item->isDir() && ! $item->isLink() ? rmdir($item->getPathname()) : unlink($item->getPathname());
+    }
+    rmdir($dir);
+    run(['git', 'worktree', 'prune'], $root, 30);
+}

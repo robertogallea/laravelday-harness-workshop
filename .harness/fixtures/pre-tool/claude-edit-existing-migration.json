@@ -1,0 +1,18 @@
+{
+  "_expect": "deny",
+  "_rule": "migration.edit-existing",
+  "_trap": "T4",
+  "_task": "fixture",
+  "session_id": "replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "{{ROOT}}/database/migrations/2025_03_04_101500_create_refunds_table.php",
+    "old_string": "$table->foreignId('order_id')->unique()->constrained();",
+    "new_string": "$table->foreignId('order_id')->constrained();"
+  },
+  "tool_use_id": "toolu_replay"
+}

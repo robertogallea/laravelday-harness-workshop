@@ -1,0 +1,13 @@
+{
+  "session_id": "replay-codex",
+  "turn_id": null,
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "SessionStart",
+  "source": "resume",
+  "model": "gpt-5.6-terra",
+  "_expect": "session.started",
+  "_contains": [
+    "T-fixture"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "_expect": "allow",
+  "_trap": "perimetro (mkdir di una cartella nello scope)",
+  "_task": "fixture",
+  "session_id": "replay",
+  "turn_id": "turn-replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-replay",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "mkdir -p app/Actions/Refunds && touch app/Actions/Refunds/RefundOrderPartially.php"
+  },
+  "tool_use_id": "call-replay"
+}
