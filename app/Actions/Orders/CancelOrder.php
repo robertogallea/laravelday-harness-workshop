@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\DB;
 
 /**
  * Cancels an order that has not been paid yet.
+ *
+ * @contract docs/contracts/orders.cancel.md
  */
 final class CancelOrder
 {
