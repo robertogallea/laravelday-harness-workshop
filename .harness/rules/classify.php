@@ -11,14 +11,47 @@ declare(strict_types=1);
  */
 
 return function (array $event): string {
-    // E9 — TODO: dai un nome al fallimento. Per esempio:
-    //   pre_tool.denied con rule migration.*                 → destructive_migration
-    //   pre_tool.denied con rule env.access / must-not-change → protected_file
-    //   pre_tool.denied con rule task.out-of-scope           → scope_violation
-    //   pre_tool.denied con rule task.no-contract            → no_contract
-    //   pre_tool.denied con rule task.self-approval          → self_approval
-    //   pre_tool.denied con rule harness.tamper              → harness_tamper
-    //   *.error                                              → hook_error
-    //   un evento che non è un fallimento (pre_tool.allowed) → none
-    return 'unclassified';
+    $name = (string) ($event['event'] ?? '');
+
+    // Un hook andato in errore è un fallimento dell'harness, non dell'agente.
+    if (str_ends_with($name, '.error')) {
+        return 'hook_error';
+    }
+
+    if ($name === 'pre_tool.denied') {
+        $rule = (string) ($event['rule'] ?? '');
+
+        return match (true) {
+            in_array($rule, ['env.access', 'task.must-not-change'], true) => 'protected_file',
+            str_starts_with($rule, 'migration.') => 'destructive_migration',
+            $rule === 'task.out-of-scope' => 'scope_violation',
+            $rule === 'task.no-contract' => 'no_contract',
+            $rule === 'task.self-approval' => 'self_approval',
+            $rule === 'harness.tamper' => 'harness_tamper',
+            default => 'policy_block', // una regola nuova (L-003) ha comunque una classe
+        };
+    }
+
+    // Il post-edit non blocca, ma dice cosa ha trovato: un errore di tipo conta più di una riformattazione.
+    if ($name === 'post_edit.checked') {
+        return match (true) {
+            (int) ($event['phpstan_errors'] ?? 0) > 0 => 'static_analysis',
+            ($event['pint_fixed'] ?? []) !== [] => 'lint',
+            ($event['skipped'] ?? []) !== [] => 'env_unavailable',
+            default => 'none',
+        };
+    }
+
+    // Lo stop porta già le classi del receipt, in ordine di gravità.
+    if ($name === 'stop.blocked') {
+        $first = is_array($event['classes'] ?? null) ? reset($event['classes']) : false;
+
+        return is_string($first) && $first !== '' ? $first : 'policy_block';
+    }
+    if ($name === 'stop.escalated') {
+        return 'budget_exhausted';
+    }
+
+    // pre_tool.allowed, session.started, stop.passed|skipped|waiting: non sono fallimenti.
+    return 'none';
 };
