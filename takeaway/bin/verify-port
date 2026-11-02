@@ -1,0 +1,634 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * php takeaway/bin/verify-port [<cartella del tuo progetto>]     (default: la cartella corrente)
+ *
+ * Il controllo del porting (scheda-porting.md): guarda la STRUTTURA dei pezzi di harness che hai
+ * portato sul tuo progetto, cioè se sono collegati fra loro. Non lancia i tuoi test, non serve
+ * vendor/, non scrive niente: va bene su Laravel 8 o successivo, con Pest o PHPUnit.
+ *
+ * Un pezzo che non hai scelto è SKIP, non un errore: la scheda ne chiede uno solo.
+ * FAIL solo per un collegamento rotto: un @contract che non risolve, un contract senza nessun test,
+ * un CLAUDE.md che non importa AGENTS.md, un JSON che l'agente non sa leggere, un pre-hook a cui
+ * manca un file (fallisce chiuso: bloccherebbe ogni azione), un Task Contract con uno status
+ * che gli script non conoscono.
+ *
+ * Exit 0 = struttura a posto (anche con WARN), 1 = almeno un FAIL, 2 = uso sbagliato.
+ * Script autonomo, PHP 8.1+, nessuna dipendenza. Licenza MIT.
+ */
+
+$arg = $argv[1] ?? getcwd();
+if (in_array($arg, ['-h', '--help'], true)) {
+    echo "Uso: php takeaway/bin/verify-port [<cartella del tuo progetto>]\n";
+    exit(0);
+}
+if (! is_dir($arg)) {
+    fwrite(STDERR, "Uso: php takeaway/bin/verify-port [<cartella del tuo progetto>]\n«{$arg}» non è una cartella.\n");
+    exit(2);
+}
+$root = rtrim((string) realpath($arg), '/');
+const BOOST = '<laravel-boost-guidelines>';
+
+$fail = 0;
+$warn = 0;
+$pezzi = [];
+
+echo "verify-port {$root}", PHP_EOL;
+
+sezione('progetto', [
+    laravel($root),
+    branch($root),
+    piano($root),
+]);
+
+$istruzioni = istruzioni($root);
+if ($istruzioni['pezzo']) {
+    $pezzi[] = 'AGENTS.md';
+}
+sezione('istruzioni (passo 3.1)', $istruzioni['esiti']);
+
+$contratti = contratti($root);
+if ($contratti['pezzo']) {
+    $pezzi[] = 'Behavioral Contract';
+}
+sezione('Behavioral Contract e test (passo 3.2)', $contratti['esiti']);
+
+$guardrail = guardrail($root);
+array_push($pezzi, ...$guardrail['pezzi']);
+sezione('guardrail (passo 3.3)', $guardrail['esiti']);
+
+$lunedi = lunedi($root);
+array_push($pezzi, ...$lunedi['pezzi']);
+if ($lunedi['esiti'] !== []) {
+    sezione('Task Contract e memoria (lunedì)', $lunedi['esiti']);
+}
+
+if ($pezzi === []) {
+    sezione('pezzi dell\'harness', [[
+        'FAIL', 'pezzi dell\'harness',
+        'nessun pezzo trovato: né AGENTS.md, né docs/contracts/, né un guardrail',
+        'riparti dalla scheda: un fallimento (fase 1), un pezzo (fase 2), poi il suo passo',
+    ]]);
+}
+
+echo PHP_EOL;
+if ($fail > 0) {
+    echo "{$fail} controll".($fail === 1 ? 'o rosso' : 'i rossi').'. Prima i rimedi indicati dalle frecce, poi rilancia.', PHP_EOL;
+    exit(1);
+}
+echo 'Struttura a posto'.($warn > 0 ? " ({$warn} WARN)" : '').': '.implode(', ', array_unique($pezzi)).'.', PHP_EOL;
+echo 'Questo controllo guarda solo i collegamenti. La prova vera la fai tu: il "fatto quando" di ogni passo della scheda.', PHP_EOL;
+exit(0);
+
+// ---------------------------------------------------------------------------
+
+/** @param list<array{0: string, 1: string, 2?: string, 3?: ?string}> $esiti [stato, titolo, messaggio, rimedio] */
+function sezione(string $nome, array $esiti): void
+{
+    global $fail, $warn;
+    echo PHP_EOL, $nome, PHP_EOL;
+    foreach ($esiti as $e) {
+        [$stato, $titolo] = $e;
+        $msg = $e[2] ?? '';
+        $rimedio = $e[3] ?? null;
+        $fail += $stato === 'FAIL' ? 1 : 0;
+        $warn += $stato === 'WARN' ? 1 : 0;
+        echo sprintf('  %-4s  %s', $stato, $titolo), $msg !== '' ? " — {$msg}" : '', PHP_EOL;
+        if ($rimedio !== null && $stato !== 'OK') {
+            echo "        → {$rimedio}", PHP_EOL;
+        }
+    }
+}
+
+function leggi(string $root, string $rel): ?string
+{
+    $f = "{$root}/{$rel}";
+    $c = is_file($f) ? @file_get_contents($f) : false;
+
+    return $c === false ? null : $c;
+}
+
+function senza_commenti(string $md): string
+{
+    return (string) preg_replace('/<!--.*?-->/s', '', $md);
+}
+
+/** La sezione `## <nome>` di un markdown, fino alla prossima `## ` (null se non c'è). */
+function sezione_md(string $md, string $nome): ?string
+{
+    return preg_match('/^##\s+'.preg_quote($nome, '/').'\b[^\n]*\n(.*?)(?=^##\s|\z)/ms', $md, $m) ? $m[1] : null;
+}
+
+/** Le righe di dati di una tabella markdown (niente intestazione né separatore), come celle. */
+function righe_tabella(string $md): array
+{
+    $righe = [];
+    $header = true;
+    foreach (preg_split('/\R/', $md) as $line) {
+        $line = trim($line);
+        if (! str_starts_with($line, '|')) {
+            $header = true;
+
+            continue;
+        }
+        if (preg_match('/^\|[\s:|-]+\|$/', $line)) {
+            $header = false;
+
+            continue;
+        }
+        if ($header) {
+            continue;
+        }
+        $righe[] = array_map('trim', explode('|', trim($line, '|')));
+    }
+
+    return $righe;
+}
+
+/** @return list<string> path relativi alla root, ordinati */
+function php_files(string $root, string $dir): array
+{
+    if (! is_dir("{$root}/{$dir}")) {
+        return [];
+    }
+    $out = [];
+    $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator("{$root}/{$dir}", FilesystemIterator::SKIP_DOTS));
+    foreach ($it as $f) {
+        if ($f->isFile() && str_ends_with($f->getFilename(), '.php')) {
+            $out[] = substr($f->getPathname(), strlen($root) + 1);
+        }
+    }
+    sort($out);
+
+    return $out;
+}
+
+function git(string $root, string ...$args): ?string
+{
+    $cmd = 'git -C '.escapeshellarg($root).' '.implode(' ', array_map('escapeshellarg', $args)).' 2>/dev/null';
+    exec($cmd, $out, $exit);
+
+    return $exit === 0 ? trim(implode("\n", $out)) : null;
+}
+
+// --- progetto ---------------------------------------------------------------
+
+function laravel(string $root): array
+{
+    $json = json_decode((string) leggi($root, 'composer.json'), true);
+    if (! is_array($json)) {
+        return ['WARN', 'Laravel', 'composer.json non c\'è o non si legge: questo controllo è pensato per un progetto Laravel'];
+    }
+    $versione = null;
+    $lock = json_decode((string) leggi($root, 'composer.lock'), true);
+    foreach ((array) ($lock['packages'] ?? []) as $p) {
+        if (($p['name'] ?? '') === 'laravel/framework') {
+            $versione = ($p['version'] ?? '?').' (composer.lock)';
+        }
+    }
+    $vincolo = $json['require']['laravel/framework'] ?? null;
+    if ($versione === null && $vincolo === null) {
+        return ['WARN', 'Laravel', 'laravel/framework non è fra i require di composer.json'];
+    }
+    $mostra = $versione ?? "laravel/framework {$vincolo} (composer.json)";
+    $major = preg_match('/(\d+)/', $versione ?? (string) $vincolo, $m) ? (int) $m[1] : null;
+    $dev = array_keys((array) ($json['require-dev'] ?? []) + (array) ($json['require'] ?? []));
+    $test = in_array('pestphp/pest', $dev, true) ? 'Pest' : (in_array('phpunit/phpunit', $dev, true) ? 'PHPUnit' : null);
+    $note = [];
+    if ($test !== null) {
+        $note[] = $test;
+    }
+    if ($major !== null && $major < 9) {
+        $note[] = 'niente model:show e db:show: discovery da migrazioni e model (scheda, tabella della discovery)';
+    }
+
+    return ['OK', 'Laravel', $mostra.($note !== [] ? ' · '.implode(' · ', $note) : '')];
+}
+
+function branch(string $root): array
+{
+    if (git($root, 'rev-parse', '--git-dir') === null) {
+        return ['WARN', 'branch', 'non è un repository git: il porting va su un branch, per farlo rivedere', 'git init (o lavora nel repo del progetto), poi git switch -c harness/porting'];
+    }
+    $b = git($root, 'symbolic-ref', '--quiet', '--short', 'HEAD');
+    if ($b === 'harness/porting') {
+        return ['OK', 'branch harness/porting'];
+    }
+
+    return ['WARN', 'branch', 'sei su '.($b ?? 'un commit staccato').', non su harness/porting', 'git switch -c harness/porting (fase 0 della scheda)'];
+}
+
+function piano(string $root): array
+{
+    $rel = 'docs/harness-porting.md';
+    $md = leggi($root, $rel);
+    if ($md === null) {
+        return ['WARN', 'piano', "manca {$rel}: fallimento, pezzo e piano per lunedì vanno nella PR", "cp <repo del workshop>/takeaway/kit/{$rel} {$rel} (fase 0)"];
+    }
+    $campi = [];
+    foreach (righe_tabella(senza_commenti($md)) as $r) {
+        if (count($r) >= 2) {
+            $campi[trim($r[0], ' *')] = trim($r[1]);
+        }
+    }
+    $vuoti = array_values(array_filter(['Fallimento', 'Pezzo scritto oggi'], fn ($k) => ($campi[$k] ?? '') === ''));
+    if ($vuoti !== []) {
+        return ['WARN', "piano ({$rel})", 'da compilare: '.implode(', ', $vuoti), 'tabella "Il mio piano" in fondo al file'];
+    }
+
+    return ['OK', "piano ({$rel})", 'fallimento e pezzo compilati'];
+}
+
+// --- istruzioni -------------------------------------------------------------
+
+function istruzioni(string $root): array
+{
+    $agents = leggi($root, 'AGENTS.md');
+    $claude = leggi($root, 'CLAUDE.md');
+    $esiti = [];
+
+    if ($agents === null) {
+        if ($claude !== null) {
+            $esiti[] = ['WARN', 'AGENTS.md', 'c\'è solo CLAUDE.md: Codex non lo legge', 'sposta le istruzioni in AGENTS.md e lascia in CLAUDE.md la riga @AGENTS.md'];
+        } else {
+            $esiti[] = ['SKIP', 'AGENTS.md', 'non c\'è: pezzo non scelto'];
+        }
+
+        return ['pezzo' => false, 'esiti' => $esiti];
+    }
+
+    // Laravel Boost genera AGENTS.md e CLAUDE.md da .ai/guidelines/*.md: a mano si perde alla rigenerazione.
+    $boost = str_contains($agents, BOOST);
+    $rigenera = 'php artisan boost:update --no-discover --ignore-skills';
+    $md = senza_commenti($agents);
+    $attese = ['Topology', 'Commands', 'Environment', 'Pitfalls', 'Conflicts'];
+    $mancanti = array_values(array_filter($attese, fn ($s) => sezione_md($md, $s) === null));
+    if ($mancanti === []) {
+        $esiti[] = ['OK', 'AGENTS.md: sezioni', 'tutte e 5'];
+    } elseif (! $boost) {
+        $esiti[] = ['WARN', 'AGENTS.md: sezioni', 'mancano '.implode(', ', $mancanti), 'copia le intestazioni da takeaway/kit/AGENTS.md: vuote vanno bene, ma ci devono essere'];
+    } else {
+        $guidelines = implode("\n", array_map(fn ($f) => senza_commenti((string) file_get_contents($f)), glob("{$root}/.ai/guidelines/*.md") ?: []));
+        $esiti[] = array_filter($mancanti, fn ($s) => sezione_md($guidelines, $s) === null) === []
+            ? ['WARN', 'AGENTS.md: sezioni', 'mancano '.implode(', ', $mancanti).": ci sono in .ai/guidelines/, ma AGENTS.md non è rigenerato: {$rigenera}"]
+            : ['WARN', 'AGENTS.md: sezioni', 'mancano '.implode(', ', $mancanti).': AGENTS.md è generato da Laravel Boost, quindi vanno in .ai/guidelines/', "takeaway/kit/AGENTS.md da \"## Topology\" in giù in .ai/guidelines/harness.md, poi {$rigenera}"];
+    }
+
+    foreach (['Commands', 'Pitfalls'] as $s) {
+        $testo = sezione_md($md, $s);
+        if ($testo !== null && trim($testo) === '') {
+            $esiti[] = ['WARN', "AGENTS.md: {$s}", 'vuota', 'il passo 3.1 compila Commands, Conflicts e Pitfalls'];
+        }
+    }
+
+    $conflicts = sezione_md($md, 'Conflicts');
+    if ($conflicts !== null) {
+        $righe = array_values(array_filter(righe_tabella($conflicts), fn ($r) => count(array_filter($r, fn ($c) => $c !== '')) >= 2));
+        $esiti[] = $righe === []
+            ? ['WARN', 'AGENTS.md: Conflicts', 'nessuna riga nella tabella', 'da una a tre righe, a partire dal fallimento della fase 1']
+            : ['OK', 'AGENTS.md: Conflicts', count($righe).' rig'.(count($righe) === 1 ? 'a' : 'he')];
+    }
+
+    $n = substr_count($agents, "\n") + 1;
+    if ($n > 200 && ! $boost) { // le linee guida di Boost non si accorciano dal porting
+        $esiti[] = ['WARN', 'AGENTS.md: lunghezza', "{$n} righe: è una mappa, non un manuale", 'sposta i dettagli nei file a cui Topology punta'];
+    }
+
+    if ($claude === null) {
+        $esiti[] = ['WARN', 'CLAUDE.md', 'non c\'è: Claude Code non legge AGENTS.md da solo', 'echo "@AGENTS.md" > CLAUDE.md'];
+    } elseif (preg_match('/^@AGENTS\.md\s*$/m', $claude)) {
+        $esiti[] = ['OK', 'CLAUDE.md importa AGENTS.md', '@AGENTS.md'];
+    } elseif ($boost && str_contains($claude, BOOST)) {
+        $esiti[] = $claude === $agents
+            ? ['OK', 'CLAUDE.md generato come AGENTS.md', 'da Laravel Boost, dalla stessa fonte (.ai/guidelines/)']
+            : ['WARN', 'CLAUDE.md', "generato da Laravel Boost ma diverso da AGENTS.md (toccato a mano, o non rigenerato): {$rigenera}"];
+    } elseif ($claude === $agents) {
+        $esiti[] = ['WARN', 'CLAUDE.md', 'copia identica di AGENTS.md: oggi coincidono, divergeranno alla prima modifica a uno solo', 'una riga @AGENTS.md in CLAUDE.md'];
+    } else {
+        $esiti[] = ['FAIL', 'CLAUDE.md', 'non importa AGENTS.md: due fonti di istruzioni che divergeranno', 'una riga @AGENTS.md in CLAUDE.md (più solo le note specifiche di Claude)'];
+    }
+
+    return ['pezzo' => true, 'esiti' => $esiti];
+}
+
+// --- contract e test --------------------------------------------------------
+
+function contratti(string $root): array
+{
+    $files = array_values(array_filter(
+        glob("{$root}/docs/contracts/*.md") ?: [],
+        fn ($f) => basename($f) !== 'INDEX.md' && ! str_starts_with(basename($f), '_'),
+    ));
+    if ($files === []) {
+        return ['pezzo' => false, 'esiti' => [['SKIP', 'Behavioral Contract', 'nessun docs/contracts/*.md: pezzo non scelto']]];
+    }
+
+    $esiti = [];
+    $index = leggi($root, 'docs/contracts/INDEX.md');
+    $groups = groups($root);
+    $citati = contract_refs($root);
+
+    foreach ($files as $f) {
+        $rel = 'docs/contracts/'.basename($f);
+        $md = senza_commenti((string) file_get_contents($f));
+        $ids = invarianti($md);
+        if ($ids === []) {
+            $esiti[] = ['WARN', $rel, 'nessun invariante con ID (PREFISSO-INV-n) nella tabella Invarianti', 'da 1 a 3 invarianti, ognuno con il suo ID'];
+        }
+        if ($index === null) {
+            $esiti[] = ['WARN', $rel, 'manca docs/contracts/INDEX.md: dall\'AGENTS.md all\'operazione serve un salto solo', 'una riga per contract in docs/contracts/INDEX.md, e INDEX.md in Topology'];
+        } elseif (! str_contains($index, basename($f))) {
+            $esiti[] = ['WARN', $rel, 'non è in INDEX.md', 'aggiungi la riga dell\'operazione in docs/contracts/INDEX.md'];
+        }
+        if (! in_array($rel, array_column($citati, 'target'), true)) {
+            $esiti[] = ['WARN', $rel, 'nessuna classe lo cita con @contract', "@contract {$rel} nel docblock della classe che implementa l'operazione"];
+        }
+        $coperti = 0;
+        foreach ($ids as $id) {
+            $dove = $groups[$id] ?? [];
+            $coperti += $dove === [] ? 0 : 1;
+            $esiti[] = $dove === []
+                ? ['WARN', $id, "non coperta: nessun test nel group {$id}", "Pest ->group('{$id}') · PHPUnit 10+ #[Group('{$id}')] · PHPUnit 9 @group {$id}"]
+                : ['OK', $id, count($dove).' test ('.implode(', ', array_unique($dove)).')'];
+        }
+        if ($ids !== [] && $coperti === 0) {
+            $esiti[] = ['FAIL', $rel, 'nessun invariante ha un test: il contract non morde', 'un test per l\'invariante più vicino al fallimento, con il suo group (passo 3.2)'];
+        }
+    }
+
+    foreach ($citati as $c) {
+        $esiti[] = is_file("{$root}/{$c['target']}")
+            ? ['OK', "@contract {$c['file']} → {$c['target']}"]
+            : ['FAIL', "@contract {$c['file']} → {$c['target']}", 'il file non c\'è', 'correggi il path nel docblock (relativo alla root del progetto)'];
+    }
+
+    return ['pezzo' => true, 'esiti' => $esiti];
+}
+
+/** Gli ID nella prima colonna delle tabelle della sezione Invarianti (o di tutto il file, se manca). */
+function invarianti(string $md): array
+{
+    $testo = sezione_md($md, 'Invarianti') ?? sezione_md($md, 'Invariants') ?? $md;
+    $ids = [];
+    foreach (righe_tabella($testo) as $r) {
+        if (preg_match('/^`?([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-INV-\d+)`?$/', $r[0] ?? '', $m)) {
+            $ids[] = $m[1];
+        }
+    }
+
+    return array_values(array_unique($ids));
+}
+
+/** group → [file di test, uno per test], dalle tre sintassi: Pest ->group(), #[Group()], @group. */
+function groups(string $root): array
+{
+    $out = [];
+    foreach (php_files($root, 'tests') as $rel) {
+        $src = (string) file_get_contents("{$root}/{$rel}");
+        $trovati = [];
+        if (preg_match_all('/->\s*group\s*\(([^)]*)\)/', $src, $m)) {
+            foreach ($m[1] as $args) {
+                preg_match_all('/[\'"]([^\'"]+)[\'"]/', $args, $q);
+                array_push($trovati, ...$q[1]);
+            }
+        }
+        if (preg_match_all('/\bGroup\s*\(\s*[\'"]([^\'"]+)[\'"]/', $src, $m)) {
+            array_push($trovati, ...$m[1]);
+        }
+        if (preg_match_all('/@group\s+([^\s*]+)/', $src, $m)) {
+            array_push($trovati, ...$m[1]);
+        }
+        foreach ($trovati as $g) {
+            $out[$g][] = $rel;
+        }
+    }
+
+    return $out;
+}
+
+/** @return list<array{file: string, target: string}> i @contract nei sorgenti (app/, src/) */
+function contract_refs(string $root): array
+{
+    $out = [];
+    foreach ([...php_files($root, 'app'), ...php_files($root, 'src')] as $rel) {
+        if (preg_match_all('/@contract\s+([^\s*]+)/', (string) file_get_contents("{$root}/{$rel}"), $m)) {
+            foreach ($m[1] as $t) {
+                $out[] = ['file' => $rel, 'target' => (string) preg_replace(['/#.*$/', '#^(\\./)+#'], '', $t)];
+            }
+        }
+    }
+
+    return $out;
+}
+
+// --- guardrail --------------------------------------------------------------
+
+function guardrail(string $root): array
+{
+    $esiti = [];
+    $pezzi = [];
+    $chiamati = [];
+
+    // Claude Code
+    $raw = leggi($root, '.claude/settings.json');
+    if ($raw === null) {
+        $esiti[] = ['SKIP', 'Claude Code: .claude/settings.json', 'non c\'è'];
+    } else {
+        $s = json_decode($raw, true);
+        if (! is_array($s)) {
+            $esiti[] = ['FAIL', 'Claude Code: .claude/settings.json', 'JSON non valido ('.json_last_error_msg().'): Claude lo ignora, e con lui i deny', 'php -r \'json_decode(file_get_contents(".claude/settings.json"), flags: JSON_THROW_ON_ERROR);\''];
+        } else {
+            $deny = (array) ($s['permissions']['deny'] ?? []);
+            if ($deny !== []) {
+                $esiti[] = ['OK', 'Claude Code: permissions.deny', count($deny).' regol'.(count($deny) === 1 ? 'a' : 'e')];
+                $pezzi[] = 'deny nativo';
+            }
+            foreach ((array) ($s['hooks'] ?? []) as $evento => $gruppi) {
+                foreach ((array) $gruppi as $g) {
+                    foreach ((array) ($g['hooks'] ?? []) as $h) {
+                        $cmd = implode(' ', [(string) ($h['command'] ?? ''), ...array_map('strval', (array) ($h['args'] ?? []))]);
+                        foreach (script_harness($cmd) as $p) {
+                            $chiamati[$p][] = "Claude {$evento}";
+                            if ($p === '.harness/bin/pre-tool' && $evento === 'PreToolUse' && ($h['onFailure'] ?? null) !== 'block') {
+                                $esiti[] = ['WARN', 'Claude Code: PreToolUse', 'senza "onFailure": "block": un timeout del guard lascerebbe passare l\'azione', 'aggiungi "onFailure": "block" all\'hook (come in .claude/settings.json del workshop)'];
+                            }
+                        }
+                    }
+                }
+            }
+            if ($deny === [] && ! isset($s['hooks'])) {
+                $esiti[] = ['SKIP', 'Claude Code: .claude/settings.json', 'né permissions.deny né hooks'];
+            }
+        }
+    }
+
+    // Codex
+    $raw = leggi($root, '.codex/hooks.json');
+    if ($raw === null) {
+        $esiti[] = ['SKIP', 'Codex: .codex/hooks.json', 'non c\'è'];
+    } else {
+        $s = json_decode($raw, true);
+        if (! is_array($s)) {
+            $esiti[] = ['FAIL', 'Codex: .codex/hooks.json', 'JSON non valido ('.json_last_error_msg().'): Codex non esegue gli hook'];
+        } else {
+            $eventi = [];
+            foreach ((array) ($s['hooks'] ?? []) as $evento => $gruppi) {
+                foreach ((array) $gruppi as $g) {
+                    foreach ((array) ($g['hooks'] ?? []) as $h) {
+                        foreach (script_harness((string) ($h['command'] ?? '')) as $p) {
+                            $chiamati[$p][] = "Codex {$evento}";
+                            $eventi[] = "{$evento} → {$p}";
+                        }
+                    }
+                }
+            }
+            $esiti[] = $eventi === []
+                ? ['WARN', 'Codex: .codex/hooks.json', 'nessun hook chiama uno script di .harness/bin']
+                : ['OK', 'Codex: .codex/hooks.json', implode(', ', array_unique($eventi)).' · ricordati /hooks per approvarli'];
+        }
+    }
+
+    // Gli script chiamati dagli adattatori esistono?
+    foreach ($chiamati as $p => $chi) {
+        if (! is_file("{$root}/{$p}")) {
+            $esiti[] = ['FAIL', $p, 'lo chiamano '.implode(', ', array_unique($chi)).', ma non c\'è', "copialo dal repo del workshop, oppure togli l'hook"];
+        }
+    }
+
+    // Il pre-hook del workshop, ridotto alle regole che servono
+    if (is_file("{$root}/.harness/bin/pre-tool")) {
+        $servono = ['.harness/lib/harness.php', '.harness/config.php', '.harness/rules/guard.php'];
+        $mancano = array_values(array_filter($servono, fn ($f) => ! is_file("{$root}/{$f}")));
+        if ($mancano !== []) {
+            $esiti[] = ['FAIL', 'pre-hook .harness/bin/pre-tool', 'manca '.implode(', ', $mancano).': il guard fallisce chiuso e blocca ogni azione dell\'agente', 'copia i file dal repo del workshop (bin/, lib/ restano come sono; config.php e rules/guard.php si riscrivono)'];
+        } else {
+            $sintassi = [];
+            foreach ([...$servono, '.harness/bin/pre-tool'] as $f) {
+                exec(escapeshellarg(PHP_BINARY).' -l '.escapeshellarg("{$root}/{$f}").' 2>&1', $o, $e);
+                if ($e !== 0) {
+                    $sintassi[] = $f;
+                }
+            }
+            preg_match_all('/^[ \t]*[\'"]([\w.-]+)[\'"]\s*=>\s*(?:static\s+)?(?:function|fn)\b/m', (string) leggi($root, '.harness/rules/guard.php'), $m);
+            if ($sintassi !== []) {
+                $esiti[] = ['FAIL', 'pre-hook .harness/bin/pre-tool', 'errore di sintassi in '.implode(', ', $sintassi).': il guard blocca ogni azione', 'php -l <file>'];
+            } elseif ($m[1] === []) {
+                $esiti[] = ['WARN', 'pre-hook .harness/bin/pre-tool', 'rules/guard.php non ha regole: il guard non nega niente'];
+            } else {
+                $chi = $chiamati['.harness/bin/pre-tool'] ?? [];
+                $esiti[] = $chi === []
+                    ? ['WARN', 'pre-hook .harness/bin/pre-tool', 'c\'è, ma nessun adattatore lo chiama', 'PreToolUse in .claude/settings.json e/o .codex/hooks.json (scheda §3.3)']
+                    : ['OK', 'pre-hook .harness/bin/pre-tool', count($m[1]).' regol'.(count($m[1]) === 1 ? 'a' : 'e').': '.implode(', ', $m[1]).' · chiamato da '.implode(', ', array_unique($chi))];
+                $pezzi[] = 'pre-hook';
+            }
+        }
+    }
+
+    // Il comando "fatto"
+    $composer = json_decode((string) leggi($root, 'composer.json'), true);
+    $check = is_array($composer) ? ($composer['scripts']['harness:check'] ?? null) : null;
+    if ($check === null) {
+        $esiti[] = ['SKIP', 'composer harness:check', 'non c\'è'];
+    } else {
+        $n = count((array) $check);
+        $commands = sezione_md(senza_commenti((string) leggi($root, 'AGENTS.md')), 'Commands') ?? '';
+        $esiti[] = str_contains($commands, 'harness:check')
+            ? ['OK', 'composer harness:check', "{$n} comand".($n === 1 ? 'o' : 'i').', citato in AGENTS.md → Commands']
+            : ['WARN', 'composer harness:check', 'non è citato in AGENTS.md → Commands: l\'agente non sa che "fatto" vuol dire questo', 'in Commands: Prima di dire "fatto": composer harness:check, deve essere verde.'];
+        $pezzi[] = 'comando "fatto"';
+    }
+
+    return ['pezzi' => $pezzi, 'esiti' => $esiti];
+}
+
+/** I path .harness/bin/<script> nominati in un comando di hook. */
+function script_harness(string $cmd): array
+{
+    preg_match_all('#\.harness/bin/[\w.-]+#', $cmd, $m);
+
+    return array_values(array_unique($m[0]));
+}
+
+// --- Task Contract e memoria ------------------------------------------------
+
+function lunedi(string $root): array
+{
+    $esiti = [];
+    $pezzi = [];
+    $approvati = [];
+
+    foreach (glob("{$root}/.harness/tasks/T-*.md") ?: [] as $f) {
+        $nome = basename($f, '.md');
+        if (! preg_match('/^T-\d+$/', $nome)) {
+            continue; // il template T-NNN.md
+        }
+        $pezzi[] = 'Task Contract';
+        $fm = frontmatter((string) file_get_contents($f));
+        if ($fm === null) {
+            $esiti[] = ['FAIL', $nome, 'senza frontmatter YAML fra due righe ---: gli script non lo leggono'];
+
+            continue;
+        }
+        $status = $fm['status'] ?? '';
+        if (! in_array($status, ['draft', 'approved'], true)) {
+            $esiti[] = ['FAIL', $nome, "status «{$status}»: gli script conoscono solo draft e approved"];
+
+            continue;
+        }
+        if ($status === 'approved') {
+            $approvati[] = $nome;
+        }
+        $mancano = array_values(array_filter(['id', 'scope', 'must_not_change', 'evidence', 'approval_required'], fn ($k) => ! array_key_exists($k, $fm)));
+        $esiti[] = $mancano === []
+            ? ['OK', $nome, "status {$status}".(($fm['id'] ?? '') !== $nome ? " · id «{$fm['id']}» diverso dal nome del file" : '')]
+            : ['WARN', $nome, 'mancano le chiavi '.implode(', ', $mancano), 'copia il frontmatter da takeaway/kit/.harness/tasks/T-NNN.md'];
+    }
+    if (count($approvati) > 1) {
+        $esiti[] = ['FAIL', 'Task Contract approvati', implode(', ', $approvati).': ce ne deve essere uno solo, il pre-hook del workshop con due fallisce chiuso', 'riporta a draft quelli che non sono il task attivo'];
+    }
+
+    $lessons = leggi($root, '.harness/memory/lessons.md');
+    if ($lessons !== null) {
+        $md = senza_commenti($lessons);
+        preg_match_all('/^##\s+(L-\d+)\b[^\n]*\n(.*?)(?=^##\s|\z)/ms', $md, $m, PREG_SET_ORDER);
+        $campi = ['Fallimento osservato', 'Fallimento prevenuto', 'Pezzo di harness', 'Quando rimuoverlo', 'Ultima volta che è scattato'];
+        foreach ($m as [, $id, $corpo]) {
+            $pezzi[] = 'Lessons';
+            $mancano = array_values(array_filter($campi, fn ($c) => ! preg_match('/\*\*'.preg_quote($c, '/').':?\*\*/u', $corpo)));
+            $esiti[] = $mancano === []
+                ? ['OK', $id, 'i cinque campi, rimozione compresa']
+                : ['WARN', $id, 'mancano i campi '.implode(', ', $mancano), '"Quando rimuoverlo" è una condizione osservabile, non "mai" (domande contro il decay)'];
+        }
+    }
+
+    $progress = leggi($root, '.harness/memory/progress.md');
+    if ($progress !== null) {
+        $pezzi[] = 'Progress';
+        $fm = frontmatter($progress) ?? [];
+        $task = $fm['task'] ?? null;
+        $esiti[] = $task === null
+            ? ['WARN', 'progress.md', 'senza task: nel frontmatter', 'task: T-NNN e updated: nel frontmatter (takeaway/kit/.harness/memory/progress.md)']
+            : (is_file("{$root}/.harness/tasks/{$task}.md")
+                ? ['OK', 'progress.md', "task {$task}"]
+                : ['WARN', 'progress.md', "task {$task}, ma .harness/tasks/{$task}.md non c'è"]);
+    }
+
+    return ['pezzi' => $pezzi, 'esiti' => $esiti];
+}
+
+/** Le chiavi di primo livello del frontmatter, con il valore scalare (senza commenti) o '' se è un blocco. */
+function frontmatter(string $md): ?array
+{
+    if (! preg_match('/\A---\R(.*?)\R---[ \t]*(\R|\z)/s', $md, $m)) {
+        return null;
+    }
+    $out = [];
+    foreach (preg_split('/\R/', $m[1]) as $line) {
+        if (preg_match('/^([A-Za-z_][\w-]*):(.*)$/', $line, $k)) {
+            $out[$k[1]] = trim((string) preg_replace('/\s+#.*$/', '', trim($k[2])), " \t\"'");
+        }
+    }
+
+    return $out;
+}

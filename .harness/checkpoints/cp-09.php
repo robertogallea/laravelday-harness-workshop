@@ -2,7 +2,7 @@
 
 // E9 (opzionale) — trace events: classify() in rules/classify.php dà un nome al fallimento di ogni
 // evento di trace. Arriva con cp-08 (ingresso: la consegna, questo file e le fixture; il file con il
-// TODO è in cp-04), la soluzione è in cp-09, che è anche la versione consegnata (tag laravelday-2026).
+// TODO è in cp-04; con lo stesso checkpoint arrivano takeaway/ e LICENSE, che il verify ignora), la soluzione è in cp-09, che è anche la versione consegnata (tag laravelday-2026).
 // Niente costanti, funzioni con nome o require in cima: il file si può caricare più volte.
 
 use Workshop as W;
@@ -56,6 +56,8 @@ return [
         '.harness/checkpoints/cp-09.php',
         'workshop/esercizi/E9.md',
         '.harness/fixtures/classify',
+        'takeaway',
+        'LICENSE',
     ],
     'uscita' => ['.harness/rules/classify.php'],
 
