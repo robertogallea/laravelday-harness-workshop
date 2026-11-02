@@ -1,0 +1,36 @@
+{
+  "_why": "REFUND-INV-4 è nel contract ma non in $groupResults (il pest --group non è partito, o è scaduto il tempo): niente prova, quindi \"non coperta\" con 0 test. E niente warning per una chiave che manca.",
+  "_from": "lo stop e bin/receipt: un vendor/bin/pest --group=<ID> per invariante, contato dal JUnit (o l'evidence del contract, se lo esegue già)",
+  "contractIds": [
+    "REFUND-INV-3",
+    "REFUND-INV-4",
+    "REFUND-INV-5"
+  ],
+  "groupResults": {
+    "REFUND-INV-3": {
+      "tests": 2,
+      "failed": 0
+    },
+    "REFUND-INV-5": {
+      "tests": 2,
+      "failed": 0
+    }
+  },
+  "_expect": [
+    {
+      "id": "REFUND-INV-3",
+      "tests": 2,
+      "outcome": "verde"
+    },
+    {
+      "id": "REFUND-INV-4",
+      "tests": 0,
+      "outcome": "non coperta"
+    },
+    {
+      "id": "REFUND-INV-5",
+      "tests": 2,
+      "outcome": "verde"
+    }
+  ]
+}

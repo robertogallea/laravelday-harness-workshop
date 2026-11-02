@@ -1,0 +1,70 @@
+{
+  "_why": "La run 1 rivista con l'harness di adesso (php .harness/bin/receipt --of=run-1, Confronto): l'agente non conosceva il contract, i suoi test non hanno nessun group. Sei righe \"non coperta\", anche con la suite verde.",
+  "_from": "lo stop e bin/receipt: un vendor/bin/pest --group=<ID> per invariante, contato dal JUnit (o l'evidence del contract, se lo esegue già)",
+  "contractIds": [
+    "REFUND-INV-1",
+    "REFUND-INV-2",
+    "REFUND-INV-3",
+    "REFUND-INV-4",
+    "REFUND-INV-5",
+    "REFUND-INV-6"
+  ],
+  "groupResults": {
+    "REFUND-INV-1": {
+      "tests": 0,
+      "failed": 0
+    },
+    "REFUND-INV-2": {
+      "tests": 0,
+      "failed": 0
+    },
+    "REFUND-INV-3": {
+      "tests": 0,
+      "failed": 0
+    },
+    "REFUND-INV-4": {
+      "tests": 0,
+      "failed": 0
+    },
+    "REFUND-INV-5": {
+      "tests": 0,
+      "failed": 0
+    },
+    "REFUND-INV-6": {
+      "tests": 0,
+      "failed": 0
+    }
+  },
+  "_expect": [
+    {
+      "id": "REFUND-INV-1",
+      "tests": 0,
+      "outcome": "non coperta"
+    },
+    {
+      "id": "REFUND-INV-2",
+      "tests": 0,
+      "outcome": "non coperta"
+    },
+    {
+      "id": "REFUND-INV-3",
+      "tests": 0,
+      "outcome": "non coperta"
+    },
+    {
+      "id": "REFUND-INV-4",
+      "tests": 0,
+      "outcome": "non coperta"
+    },
+    {
+      "id": "REFUND-INV-5",
+      "tests": 0,
+      "outcome": "non coperta"
+    },
+    {
+      "id": "REFUND-INV-6",
+      "tests": 0,
+      "outcome": "non coperta"
+    }
+  ]
+}

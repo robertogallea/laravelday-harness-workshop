@@ -1,0 +1,70 @@
+{
+  "_why": "REFUND-INV-6 (audit) senza nessun test con ->group('REFUND-INV-6'): 0 test non è verde, è \"non coperta\". È la riga che separa \"ho finito\" da \"posso dimostrarlo\".",
+  "_from": "lo stop e bin/receipt: un vendor/bin/pest --group=<ID> per invariante, contato dal JUnit (o l'evidence del contract, se lo esegue già)",
+  "contractIds": [
+    "REFUND-INV-1",
+    "REFUND-INV-2",
+    "REFUND-INV-3",
+    "REFUND-INV-4",
+    "REFUND-INV-5",
+    "REFUND-INV-6"
+  ],
+  "groupResults": {
+    "REFUND-INV-1": {
+      "tests": 2,
+      "failed": 0
+    },
+    "REFUND-INV-2": {
+      "tests": 2,
+      "failed": 0
+    },
+    "REFUND-INV-3": {
+      "tests": 2,
+      "failed": 0
+    },
+    "REFUND-INV-4": {
+      "tests": 2,
+      "failed": 0
+    },
+    "REFUND-INV-5": {
+      "tests": 2,
+      "failed": 0
+    },
+    "REFUND-INV-6": {
+      "tests": 0,
+      "failed": 0
+    }
+  },
+  "_expect": [
+    {
+      "id": "REFUND-INV-1",
+      "tests": 2,
+      "outcome": "verde"
+    },
+    {
+      "id": "REFUND-INV-2",
+      "tests": 2,
+      "outcome": "verde"
+    },
+    {
+      "id": "REFUND-INV-3",
+      "tests": 2,
+      "outcome": "verde"
+    },
+    {
+      "id": "REFUND-INV-4",
+      "tests": 2,
+      "outcome": "verde"
+    },
+    {
+      "id": "REFUND-INV-5",
+      "tests": 2,
+      "outcome": "verde"
+    },
+    {
+      "id": "REFUND-INV-6",
+      "tests": 0,
+      "outcome": "non coperta"
+    }
+  ]
+}
