@@ -19,3 +19,11 @@ Regola anti-decay: ogni pezzo di harness risponde a "quale fallimento previene?"
 - **Pezzo di harness:** pre-tool, regole `migration.edit-existing` e `migration.destructive` in `.harness/rules/guard.php` + Pitfall in AGENTS.md.
 - **Quando rimuoverlo:** quando il progetto ha un controllo equivalente in CI (per esempio un lint delle migrazioni).
 - **Ultima volta che è scattato:** —
+
+## L-003 — Dipendenza nuova senza approvazione
+
+- **Fallimento osservato:** costruendo il workshop, lo skeleton di Laravel 13 portava un AGENTS.md di Boost che chiede all'agente di lanciare `composer require laravel/boost`. Nelle run di oggi nessun agente l'ha fatto, ma niente lo impediva: T-001 mette "dipendenze composer nuove" in `approval_required`, e quella riga la legge solo l'agente.
+- **Fallimento prevenuto:** un pacchetto (e un `composer.lock`) che nessun umano ha scelto: licenza, sicurezza, compatibilità con PHP 8.3, peso per tutto il team.
+- **Pezzo di harness:** pre-tool, regola `dependency.new` in `.harness/rules/guard.php` (`composer require` anche abbreviato, scritture su `composer.json` e `composer.lock`) + fixture `.harness/fixtures/pre-tool/codex-composer-require-boost.json`.
+- **Quando rimuoverlo:** quando la CI rifiuta da sola una PR che cambia `composer.lock` senza l'approvazione di un umano, oppure quando l'agente gira in una sandbox senza rete, dove `composer require` non può scaricare niente.
+- **Ultima volta che è scattato:** —

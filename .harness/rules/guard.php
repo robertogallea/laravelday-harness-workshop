@@ -94,6 +94,22 @@ return [
         return null;
     },
 
+    // lesson: L-003 — una dipendenza nuova entra solo con l'umano (approval_required di T-001).
+    // Prima delle regole task.*: una scrittura su composer.json la nega questa, non task.out-of-scope.
+    'dependency.new' => function (Payload $p, array $ctx): ?string {
+        // `composer require`, anche abbreviato (req, requ…) e con le opzioni prima del comando; install, show e dump-autoload passano.
+        if ($p->tool === 'shell' && preg_match('/\bcomposer(?:\.phar)?(?:\s+-\S+)*\s+(?:global\s+)?req\w*\b/', $p->command)) {
+            return 'Una dipendenza nuova la sceglie l\'umano (approval_required del Task Contract): non installarla tu. Usa quello che c\'è già in composer.json, oppure chiedi con [ATTESA-UMANO]: <pacchetto, versione e perché>.';
+        }
+        foreach ([...$p->writes(), ...$ctx['shell_writes']] as $path) {
+            if (in_array($path, ['composer.json', 'composer.lock'], true)) {
+                return "{$path} decide le dipendenze di tutto il team: non lo modifichi tu. Se ti serve un pacchetto, chiedilo con [ATTESA-UMANO]: <pacchetto, versione e perché>.";
+            }
+        }
+
+        return null;
+    },
+
     'task.self-approval' => function (Payload $p, array $ctx): ?string {
         $task = $ctx['task'];
         foreach ([...$p->writes(), ...$ctx['shell_writes']] as $path) {
