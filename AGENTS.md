@@ -9,6 +9,7 @@ Back office di ordini e rimborsi — Laravel 13, PHP 8.3+, SQLite, Pest 4: API p
 - `app/Payments/` — gateway di pagamento: `PaymentGateway` (interfaccia), `HttpPaymentGateway` (reale), `FakePaymentGateway` (test).
 - `app/Services/RefundService.php` — rimborso totale legacy, in produzione: leggi Conflicts prima di aprirlo.
 - `docs/contracts/INDEX.md` — indice dei Behavioral Contract, uno per operazione. Leggilo prima di toccare un'operazione.
+- `docs/glossary.md` — le parole del dominio (saldo rimborsabile, chiave di idempotenza, …) e dove stanno nel codice.
 - `docs/adr/` — decisioni architetturali (MADR): il perché delle regole di Conflicts. Aprile quando devi scegliere fra due forme di codice.
 - `.harness/memory/facts.md` — fatti verificati sul progetto, ciascuno con il comando che lo riverifica.
 
