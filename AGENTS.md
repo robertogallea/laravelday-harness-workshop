@@ -9,6 +9,7 @@ Back office di ordini e rimborsi — Laravel 13, PHP 8.3+, SQLite, Pest 4: API p
 - `app/Payments/` — gateway di pagamento: `PaymentGateway` (interfaccia), `HttpPaymentGateway` (reale), `FakePaymentGateway` (test).
 - `app/Services/RefundService.php` — rimborso totale legacy, in produzione: leggi Conflicts prima di aprirlo.
 - `docs/contracts/INDEX.md` — indice dei Behavioral Contract, uno per operazione. Leggilo prima di toccare un'operazione.
+- `docs/adr/` — decisioni architetturali (MADR): il perché delle regole di Conflicts. Aprile quando devi scegliere fra due forme di codice.
 - `.harness/memory/facts.md` — fatti verificati sul progetto, ciascuno con il comando che lo riverifica.
 
 ## Commands
@@ -36,7 +37,7 @@ Regola: il codice nuovo segue sempre la **convenzione dichiarata** (Actions + `O
 
 | ID | Dove | Divergenza | Per il codice nuovo |
 |---|---|---|---|
-| C1 | `app/Services/RefundService.php` | I rimborsi totali passano ancora dal Service legacy, chiamato da `Admin\OrderRefundController`. | Una classe in `app/Actions/Refunds/`. Non estendere il Service: si migra solo se è nello scope del Task Contract. |
+| C1 | `app/Services/RefundService.php` | I rimborsi totali passano ancora dal Service legacy, chiamato da `Admin\OrderRefundController`. | Una classe in `app/Actions/Refunds/`. Non estendere il Service: si migra solo se è nello scope del Task Contract. Perché: [ADR 0001](docs/adr/0001-actions-over-services.md). |
 | C2 | `RefundService::refundInFull()` | Autorizza con `isStaff()`, quindi anche `support` rimborsa per intero. È un'eccezione nota, coperta da un test. | La fonte dell'autorizzazione è `OrderPolicy::refund` (solo `finance` e `admin`). Non copiare `isStaff()` e non correggerlo fuori scope. |
 | C3 | `refunds.amount` | Euro `decimal(8,2)` (legacy). Ogni altro importo, `orders.amount` compreso, è in centesimi interi. | Converti nel codice. La colonna non si cambia senza un ADR. |
 | C4 | `Idempotency-Key` | L'idempotenza esiste solo sul checkout (middleware `idempotent` su `POST api/orders`). Il Service passa al gateway la chiave derivata `refund-{id}`, che regge un solo rimborso per ordine. | Ogni operazione che muove denaro riceve la chiave dal client con l'header `Idempotency-Key` e la passa al gateway. |
