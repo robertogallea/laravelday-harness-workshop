@@ -1,0 +1,123 @@
+{
+  "session_id": "replay-claude",
+  "transcript_path": "/tmp/replay-transcript.jsonl",
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "Fatto: rimborso parziale implementato, test verdi.",
+  "_verification": {
+    "changed": [
+      {
+        "path": "app/Actions/Refunds/RefundOrderPartially.php",
+        "added": 54,
+        "removed": 0
+      },
+      {
+        "path": "tests/Feature/Refunds/PartialRefundTest.php",
+        "added": 118,
+        "removed": 0
+      },
+      {
+        "path": ".harness/memory/progress.md",
+        "added": 6,
+        "removed": 6
+      },
+      {
+        "path": "app/Services/RefundService.php",
+        "added": 3,
+        "removed": 1
+      }
+    ],
+    "selection": {
+      "how": "convention",
+      "boot": "ok",
+      "necromancer": "assente",
+      "files": [
+        "tests/Feature/Refunds/PartialRefundTest.php"
+      ]
+    },
+    "tests": {
+      "tests": 11,
+      "failed": 0,
+      "failures": []
+    },
+    "evidence": [
+      {
+        "command": "vendor/bin/pest --group=REFUND-INV-1",
+        "exit": 0,
+        "tests": 2,
+        "failed": 0,
+        "failures": [],
+        "ms": 420
+      },
+      {
+        "command": "vendor/bin/pest",
+        "exit": 0,
+        "tests": 34,
+        "failed": 0,
+        "failures": [],
+        "ms": 910
+      }
+    ],
+    "invariants": {
+      "ids": [
+        "REFUND-INV-1",
+        "REFUND-INV-2",
+        "REFUND-INV-3",
+        "REFUND-INV-4",
+        "REFUND-INV-5",
+        "REFUND-INV-6"
+      ],
+      "rows": [
+        {
+          "id": "REFUND-INV-1",
+          "tests": 2,
+          "outcome": "verde"
+        },
+        {
+          "id": "REFUND-INV-2",
+          "tests": 2,
+          "outcome": "verde"
+        },
+        {
+          "id": "REFUND-INV-3",
+          "tests": 2,
+          "outcome": "verde"
+        },
+        {
+          "id": "REFUND-INV-4",
+          "tests": 2,
+          "outcome": "verde"
+        },
+        {
+          "id": "REFUND-INV-5",
+          "tests": 2,
+          "outcome": "verde"
+        },
+        {
+          "id": "REFUND-INV-6",
+          "tests": 2,
+          "outcome": "verde"
+        }
+      ],
+      "todo": false
+    },
+    "progress": {
+      "task": "T-fixture",
+      "fresh": true,
+      "problem": null
+    },
+    "perimeter": {
+      "protected": [
+        "app/Services/RefundService.php"
+      ],
+      "out_of_scope": [
+        "app/Services/RefundService.php"
+      ]
+    }
+  },
+  "_expect": "stop.blocked",
+  "_contains": [
+    "app/Services/RefundService.php"
+  ]
+}

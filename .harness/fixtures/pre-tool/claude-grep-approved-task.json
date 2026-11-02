@@ -1,0 +1,15 @@
+{
+  "_expect": "allow",
+  "_trap": "lettura libera (cercare il contract attivo non è approvarlo)",
+  "_task": "fixture",
+  "session_id": "replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "ls .harness/tasks/ 2>/dev/null && grep -l \"status: approved\" .harness/tasks/*.md 2>/dev/null"
+  },
+  "tool_use_id": "toolu_replay"
+}

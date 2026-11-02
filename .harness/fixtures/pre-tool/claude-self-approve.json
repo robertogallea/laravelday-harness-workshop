@@ -1,0 +1,18 @@
+{
+  "_expect": "deny",
+  "_rule": "task.self-approval",
+  "_trap": "gate",
+  "_task": "fixture",
+  "session_id": "replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "{{ROOT}}/.harness/tasks/T-002.md",
+    "old_string": "status: draft",
+    "new_string": "status: approved"
+  },
+  "tool_use_id": "toolu_replay"
+}

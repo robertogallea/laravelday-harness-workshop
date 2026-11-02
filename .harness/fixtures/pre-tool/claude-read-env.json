@@ -1,0 +1,16 @@
+{
+  "_expect": "deny",
+  "_rule": "env.access",
+  "_trap": "T5",
+  "_task": "none",
+  "session_id": "replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "tool_name": "Read",
+  "tool_input": {
+    "file_path": "{{ROOT}}/.env"
+  },
+  "tool_use_id": "toolu_replay"
+}

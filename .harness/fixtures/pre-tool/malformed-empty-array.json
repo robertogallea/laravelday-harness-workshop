@@ -1,0 +1,7 @@
+{
+  "_expect": "deny",
+  "_rule": "fail-closed",
+  "_trap": "fail-closed",
+  "_task": "fixture",
+  "_stdin": "[]"
+}

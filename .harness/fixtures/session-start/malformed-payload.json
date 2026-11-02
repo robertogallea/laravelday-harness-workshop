@@ -1,0 +1,4 @@
+{
+  "_stdin": "non è json",
+  "_expect": "session.error"
+}

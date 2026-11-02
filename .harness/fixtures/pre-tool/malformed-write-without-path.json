@@ -1,0 +1,7 @@
+{
+  "_expect": "deny",
+  "_rule": "fail-closed",
+  "_trap": "fail-closed",
+  "_task": "fixture",
+  "_stdin": "{\"session_id\": \"replay\", \"cwd\": \"{{ROOT}}\", \"hook_event_name\": \"PreToolUse\", \"tool_name\": \"Write\", \"tool_input\": {\"file_path\": null, \"content\": \"<?php\"}}"
+}

@@ -1,0 +1,4 @@
+{
+  "_stdin": "{\"session_id\": \"rotto\", ",
+  "_expect": "stop.error"
+}

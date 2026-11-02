@@ -1,0 +1,17 @@
+{
+  "_expect": "deny",
+  "_rule": "task.no-contract",
+  "_trap": "gate",
+  "_task": "none",
+  "session_id": "replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "{{ROOT}}/app/Actions/Refunds/RefundOrderPartially.php",
+    "content": "<?php\n\nnamespace App\\Actions\\Refunds;\n"
+  },
+  "tool_use_id": "toolu_replay"
+}

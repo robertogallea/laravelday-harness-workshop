@@ -1,0 +1,17 @@
+{
+  "_expect": "deny",
+  "_rule": "task.out-of-scope",
+  "_trap": "perimetro",
+  "_task": "fixture",
+  "session_id": "replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "{{ROOT}}/app/Models/Order.php",
+    "content": "<?php // ..."
+  },
+  "tool_use_id": "toolu_replay"
+}

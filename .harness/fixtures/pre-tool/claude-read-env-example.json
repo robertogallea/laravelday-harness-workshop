@@ -1,0 +1,15 @@
+{
+  "_expect": "allow",
+  "_trap": "T5 (.env.example resta leggibile)",
+  "_task": "none",
+  "session_id": "replay",
+  "transcript_path": null,
+  "cwd": "{{ROOT}}",
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "tool_name": "Read",
+  "tool_input": {
+    "file_path": "{{ROOT}}/.env.example"
+  },
+  "tool_use_id": "toolu_replay"
+}

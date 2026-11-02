@@ -1,0 +1,202 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/*
+ * .harness/bin/stop — Stop, uguale per Claude Code e Codex: la prova prima del "fatto".
+ *
+ * L'agente vuole chiudere. Se nella sessione ha cambiato del codice, lo stop esegue la verifica
+ * di lib/receipt.php (perimetro, Pint e PHPStan, test mirati, evidence, invarianti, Progress),
+ * scrive il Change Receipt in .harness/runs/<run>/ e decide:
+ *   tutto verde                  → lascia chiudere ({}), tentativi a zero          stop.passed
+ *   rosso, tentativo 1 o 2 di 3  → blocca: il reason è un'istruzione per l'agente  stop.blocked
+ *   rosso al 3° tentativo        → escalation: lascia chiudere con un messaggio
+ *                                  per l'umano, tentativi a zero (il prossimo
+ *                                  stop rosso riparte da 1/3)                       stop.escalated
+ *   [ATTESA-UMANO] nel messaggio → niente test, receipt IN ATTESA                   stop.waiting
+ *   niente task, niente codice   → lascia chiudere subito (su Codex lo stop
+ *                                  scatta a ogni turno: deve costare poco)          stop.skipped
+ *
+ * Fallisce APERTO: un crash (o il tempo finito) lascia chiudere, perché un blocco su un crash
+ * è un loop. Mai in silenzio: receipt NON VERIFICATO, stop.error nel trace, e un avviso al
+ * session-start successivo. Risponde sempre con JSON: Codex lo vuole anche quando lascia chiudere.
+ *
+ * Il budget è nostro e uguale nei due agenti: Codex non ne ha uno, quello di Claude si azzera
+ * a ogni tool call. stop_hook_active finisce nel trace, ma non decide niente.
+ * HARNESS_STOP_DRY=<file.json>: la verifica è già fatta (la usa replay), lo stop decide e basta.
+ */
+
+namespace Harness;
+
+register_shutdown_function(function (): void {
+    $e = error_get_last();
+    if ($e !== null && in_array($e['type'], [E_ERROR, E_PARSE, E_COMPILE_ERROR, E_CORE_ERROR], true)) {
+        echo '{}'; // un fatal non deve lasciare l'agente senza risposta
+    }
+});
+
+$p = $root = $state = $task = null;
+try {
+    require __DIR__.'/../lib/harness.php';
+    require __DIR__.'/../lib/receipt.php';
+    $root = root_from(__DIR__);
+    $p = Payload::fromStdin($argv, $root);
+    $config = require $root.'/.harness/config.php';
+    $state = State::load($root, $p->sessionId);
+    $budget = (int) $config['retry_budget'];
+    $runDir = run_dir($root, $state['run']);
+    $dry = getenv('HARNESS_STOP_DRY') ?: null;
+    $common = ['stop_hook_active' => (bool) ($p->raw['stop_hook_active'] ?? false)];
+
+    // Nessun Task Contract approvato: si sta ancora negoziando, non c'è niente da dimostrare.
+    $task = active_task($root);
+    if ($task === null) {
+        trace($p, 'stop.skipped', ['why' => 'no-task'] + $common);
+        Out::pass('Stop');
+    }
+    $task['_title'] = task_title($task);
+    $meta = ['run' => $state['run'], 'agent' => $p->agent, 'task' => $task, 'base' => $state['base'], 'budget' => $budget,
+        'transcript_path' => $p->raw['transcript_path'] ?? null];
+
+    // L'agente aspetta una decisione umana: niente test, e il receipt dice IN ATTESA, mai VERDE.
+    // Il marcatore conta solo come lo chiede AGENTS.md, a inizio riga e con la domanda: citarlo non basta.
+    $message = last_message($p);
+    if (preg_match('/^[\s*_>]*'.preg_quote((string) $config['waiting_marker'], '/').'\s*:\s*\S.*/msu', $message, $m)) {
+        write_receipt($runDir, null, $meta + ['verdict' => 'IN ATTESA', 'question' => mb_substr(ltrim($m[0], " \t*_>"), 0, 600)]);
+        trace($p, 'stop.waiting', $common);
+        Out::pass('Stop');
+    }
+
+    // Cosa ha cambiato questa sessione. Contratti in bozza e memoria non sono codice da verificare.
+    $deadline = microtime(true) + (int) ($config['timeouts']['stop'] ?? 540);
+    if ($dry !== null) {
+        $v = json_decode((string) file_get_contents($dry), true);
+        if (! is_array($v)) {
+            throw new \RuntimeException("HARNESS_STOP_DRY: {$dry} non contiene una verifica");
+        }
+        $v = verification_defaults($v);
+        $changed = array_column($v['changed'], 'path');
+    } else {
+        $changed = session_changes($root, $state);
+    }
+    if (array_filter($changed, fn ($f) => ! any_match(list_of($config['always_writable']), $f)) === []) {
+        trace($p, 'stop.skipped', ['why' => 'no-changes'] + $common);
+        Out::pass('Stop');
+    }
+
+    // Pint riformatta prima dell'impronta. Stessa impronta dell'ultimo stop = stessa verifica, senza rieseguire niente:
+    // se era verde lascia chiudere; se era rossa (anche dopo un'escalation, quando il budget riparte) è un altro tentativo.
+    $pint = $dry === null ? pint_fix($root, $changed, $config, $deadline) : null;
+    $fp = sha1($dry !== null ? json_encode($v) : json_encode(array_map(fn ($f) => [$f, file_hash($root, $f)], $changed)));
+    $last = is_array($state['last'] ?? null) ? $state['last'] : null;
+    if ($last !== null && $last['fp'] === $fp && $last['verdict'] === 'VERDE') {
+        trace($p, 'stop.skipped', ['why' => 'already-green'] + $common);
+        Out::pass('Stop');
+    }
+    $cached = $last !== null && $last['fp'] === $fp;
+    if ($cached) {
+        $v = $last['v'];
+    } elseif ($dry === null) {
+        $v = verification($root, $task, (string) $state['base'], $changed, $config, $pint, (int) $state['started_at'], $runDir, $deadline);
+    }
+
+    [$action, $attempt] = decide(failure_classes($v), (int) $state['attempts'], $budget);
+    [$verdict, $event] = ['pass' => ['VERDE', 'stop.passed'], 'block' => ['ROSSO', 'stop.blocked'], 'escalate' => ['ESCALATION', 'stop.escalated']][$action];
+    $state['attempts'] = $action === 'block' ? $attempt : 0;
+    $state['last'] = ['fp' => $fp, 'verdict' => $verdict, 'v' => $v];
+    State::save($root, $p->sessionId, $state);
+
+    trace($p, $event, [
+        'classes' => failure_classes($v), 'attempt' => $attempt, 'budget' => $budget, 'selection' => $v['selection']['how'],
+        'tests' => ['passed' => (int) $v['tests']['tests'] - (int) $v['tests']['failed'], 'failed' => (int) $v['tests']['failed']],
+        'cached' => $cached, 'ms' => (int) $v['ms'],
+    ] + $common);
+    $restart = $action === 'escalate' && $state['base'] ? last_checkpoint($root, (string) $state['base']) : null;
+    $receipt = write_receipt($runDir, $v, $meta + ['verdict' => $verdict, 'attempt' => $attempt ?: null, 'restart' => $restart]);
+    $receiptRel = rel($root, $root, $receipt);
+
+    if ($action === 'pass') {
+        Out::pass('Stop');
+    }
+    if ($action === 'block') {
+        // Il reason è un'istruzione (su Codex diventa il prompt successivo): i problemi, poi sempre dove guardare.
+        $head = "[harness:stop] Il receipt è rosso: il task non è finito. Correggi e riprova (tentativo {$attempt}/{$budget}):\n";
+        $fixed = $v['static']['pint']['fixed'] ?? [];
+        $foot = ($fixed ? "\nPint ha riformattato ".implode(', ', $fixed).': rileggili prima di modificarli.' : '')
+            ."\nDettaglio: {$receiptRel} (rilancia la verifica con php .harness/bin/receipt). "
+            ."Se ti serve una decisione umana, chiudi il messaggio con {$config['waiting_marker']}: <domanda>.";
+        $lines = implode("\n", array_map(fn ($x) => '- '.$x['text'], problems($v)));
+        $room = (int) $config['max_context_chars'] - mb_strlen($head) - mb_strlen($foot);
+        Out::block($head.(mb_strlen($lines) > $room ? mb_substr($lines, 0, max(0, $room - 1)).'…' : $lines).$foot);
+    }
+    Out::release(mb_substr("[harness:stop] ESCALATION: {$attempt}/{$budget} stop rossi di seguito su {$task['id']} ("
+        .implode(', ', failure_classes($v)).'). L\'agente ha finito i tentativi: decidi tu. '
+        ."Receipt: {$receiptRel}".($restart ? " · per ripartire dall'ultimo checkpoint verde: git switch -c retry {$restart}" : ''), 0, (int) $config['max_context_chars']));
+} catch (\Throwable $e) {
+    // Fallisce aperto, ma lascia una traccia: receipt NON VERIFICATO e stop.error.
+    try {
+        if ($root !== null && function_exists(__NAMESPACE__.'\write_receipt')) {
+            $p ??= Payload::fromArray([], $root);
+            trace($p, 'stop.error', ['message' => mb_substr($e->getMessage(), 0, 300)]); // prima: il trace non lancia mai
+            $state ??= State::load($root, $p->sessionId);
+            write_receipt(run_dir($root, $state['run']), null, [
+                'run' => $state['run'], 'agent' => $p->agent, 'task' => $task ?? [], 'base' => $state['base'],
+                'verdict' => 'NON VERIFICATO', 'error' => $e->getMessage(),
+            ]);
+        }
+    } catch (\Throwable) {
+    }
+    echo '{}';
+    exit(0);
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * pass | block | escalate, e il numero di questo tentativo.
+ *
+ * @param  list<string>  $classes  le classi di fallimento della verifica ([] = verde)
+ * @return array{0: string, 1: int}
+ */
+function decide(array $classes, int $attempts, int $budget): array
+{
+    if ($classes === []) {
+        return ['pass', 0];
+    }
+    $attempt = $attempts + 1;
+
+    return [$attempt < $budget ? 'block' : 'escalate', $attempt];
+}
+
+/** L'ultimo messaggio dell'agente: Codex lo passa nel payload; altrimenti dal transcript di Claude. */
+function last_message(Payload $p): string
+{
+    if (is_string($p->raw['last_assistant_message'] ?? null)) {
+        return $p->raw['last_assistant_message'];
+    }
+    $file = $p->raw['transcript_path'] ?? null;
+    if (! is_string($file) || ! is_file($file)) {
+        return '';
+    }
+    $size = (int) filesize($file);
+    $fh = @fopen($file, 'r');
+    if ($fh === false) {
+        return '';
+    }
+    fseek($fh, max(0, $size - 262144));
+    $lines = array_reverse(preg_split('/\R/', (string) stream_get_contents($fh)) ?: []);
+    fclose($fh);
+    foreach ($lines as $line) {
+        $row = json_decode($line, true);
+        if (($row['type'] ?? null) !== 'assistant' || ! is_array($row['message']['content'] ?? null)) {
+            continue;
+        }
+        $text = implode("\n", array_map(fn ($b) => (string) ($b['text'] ?? ''), array_filter($row['message']['content'], fn ($b) => ($b['type'] ?? null) === 'text')));
+        if (trim($text) !== '') {
+            return $text;
+        }
+    }
+
+    return '';
+}

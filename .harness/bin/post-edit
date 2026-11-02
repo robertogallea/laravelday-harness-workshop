@@ -1,0 +1,87 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/*
+ * .harness/bin/post-edit — PostToolUse dopo una scrittura, uguale per Claude Code e Codex.
+ *
+ * Per ogni file scritto che esiste ancora (al massimo 5) chiede a rules/post-edit.php quali
+ * comandi lanciare (commandsFor, E6), li lancia in ordine con un timeout ciascuno, e passa gli
+ * esiti a feedback (E6): il testo che torna diventa l'additionalContext dell'agente.
+ * Tutto pulito → nessun output. Mai decision:block: Codex sostituirebbe il risultato del tool.
+ *
+ * Fallisce APERTO: un errore, anche nelle regole, non blocca mai l'editing (exit 0, nessun
+ * output, post_edit.error). Uno strumento che manca o che va in timeout è un esito, non un errore.
+ * Il "fatto" lo decide lo stop, che rilancia Pint e PHPStan su tutto il diff della sessione.
+ *
+ * HARNESS_TOOLS='{"phpstan": [...]}': sostituisce dei comandi di config.php → tools
+ * (la usa replay, per esempio per provare un PHPStan che non c'è).
+ */
+
+namespace Harness;
+
+$p = null;
+try {
+    require __DIR__.'/../lib/harness.php';
+    require __DIR__.'/../lib/receipt.php';
+    $t0 = microtime(true);
+    $root = root_from(__DIR__);
+    $p = Payload::fromStdin($argv, $root);
+    $config = require $root.'/.harness/config.php';
+    $policy = require $root.'/.harness/rules/post-edit.php';
+    $tools = (array) ($config['tools'] ?? []);
+    $override = json_decode((string) getenv('HARNESS_TOOLS'), true);
+    $tools = is_array($override) ? array_replace($tools, $override) : $tools;
+    $deadline = $t0 + (int) ($config['timeouts']['post_edit'] ?? 100); // sotto i 120 s dell'adattatore
+
+    $files = array_slice(array_values(array_filter($p->writes(), fn ($f) => is_file($root.'/'.$f))), 0, 5);
+    $results = [];
+    foreach ($files as $path) {
+        foreach ($policy['commandsFor']($path, $tools) as $tool => $cmd) {
+            $tool = (string) $tool;
+            $cmd = list_of($cmd);
+            $result = ['path' => $path, 'tool' => $tool, 'exit' => null, 'skipped' => null, 'changed' => false, 'output' => ''];
+            if ($cmd === [] || tool_missing($root, $cmd)) {
+                $results[] = ['skipped' => 'missing'] + $result;
+
+                continue;
+            }
+            $before = file_hash($root, $path);
+            try {
+                $r = run_until($cmd, $root, (int) ($config['timeouts'][$tool] ?? 60), $deadline);
+            } catch (DeadlineExceeded) {
+                $results[] = ['skipped' => 'timeout'] + $result; // tempo finito: i comandi che restano non partono
+
+                continue;
+            }
+            $results[] = [
+                'exit' => $r['timed_out'] ? null : $r['exit'],
+                'skipped' => $r['timed_out'] ? 'timeout' : null,
+                'changed' => file_hash($root, $path) !== $before,
+                'output' => trim(str_replace($root.DIRECTORY_SEPARATOR, '', $r['out']."\n".$r['err'])),
+            ] + $result;
+        }
+    }
+
+    $text = $results === [] ? null : $policy['feedback']($results);
+    $text = is_string($text) && trim($text) !== '' ? trim($text) : null;
+    $by = fn (string $tool) => array_values(array_filter($results, fn ($r) => $r['tool'] === $tool));
+    trace($p, 'post_edit.checked', [
+        'files' => $files,
+        'commands' => count($results),
+        'skipped' => array_values(array_unique(array_map(fn ($r) => "{$r['tool']}: {$r['skipped']}", array_filter($results, fn ($r) => $r['skipped'] !== null)))),
+        'pint_fixed' => array_column(array_filter($by('pint'), fn ($r) => $r['changed']), 'path'),
+        'phpstan_errors' => array_sum(array_map(fn ($r) => preg_match_all('/^.+\.php:\d+:/m', $r['output']), $by('phpstan'))),
+        'context_chars' => $text === null ? 0 : mb_strlen($text),
+        'ms' => (int) round((microtime(true) - $t0) * 1000),
+    ]);
+    if ($text !== null) {
+        Out::context('PostToolUse', $text, (int) ($config['max_context_chars'] ?? 1500));
+    }
+} catch (\Throwable $e) {
+    if ($p instanceof Payload) {
+        trace($p, 'post_edit.error', ['message' => mb_substr($e->getMessage(), 0, 300)]);
+    }
+}
+exit(0);
