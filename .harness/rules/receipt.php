@@ -14,12 +14,16 @@ return [
      * Una riga per invariante: quanti test la provano e con che esito.
      */
     'invariantRows' => function (array $contractIds, array $groupResults): array {
-        // E7 — TODO: una riga per ogni ID del contract, nell'ordine del contract.
-        //   almeno un rosso → "rossa" (anche con 0 test: un errore prima dei test, come un
-        //     ParseError, dà tests 0 e failed 1, e non è un test mancante);
-        //   0 test, o l'ID assente da $groupResults → "non coperta" (l'agente non la può dimostrare);
-        //   altrimenti "verde".
-        // Fixture in .harness/fixtures/receipt/ (arrivano con checkpoint inizia E7) · php .harness/bin/verify E7
-        return [];
+        // Una riga per ID del contract, nel suo ordine; i group che non sono del contract non contano.
+        return array_map(function (string $id) use ($groupResults): array {
+            $tests = (int) ($groupResults[$id]['tests'] ?? 0);
+            $failed = (int) ($groupResults[$id]['failed'] ?? 0);
+
+            return ['id' => $id, 'tests' => $tests, 'outcome' => match (true) {
+                $failed > 0 => 'rossa',        // prima di "0 test": un ParseError dà 0 test e 1 rosso
+                $tests === 0 => 'non coperta', // niente test, o nessun esito: non si può dimostrare
+                default => 'verde',
+            }];
+        }, array_values($contractIds));
     },
 ];
