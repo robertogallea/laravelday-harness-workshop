@@ -1,0 +1,44 @@
+{
+  "_why": "Le righe seguono il contract, non $groupResults: qui i group arrivano in un altro ordine e c'è un group (CANCEL-INV-1) che non è del contract. Una riga per ID del contract, nessuna per il resto.",
+  "_from": "lo stop e bin/receipt: un vendor/bin/pest --group=<ID> per invariante, contato dal JUnit (o l'evidence del contract, se lo esegue già)",
+  "contractIds": [
+    "REFUND-INV-1",
+    "REFUND-INV-5",
+    "REFUND-INV-2"
+  ],
+  "groupResults": {
+    "CANCEL-INV-1": {
+      "tests": 3,
+      "failed": 0
+    },
+    "REFUND-INV-2": {
+      "tests": 1,
+      "failed": 0
+    },
+    "REFUND-INV-5": {
+      "tests": 2,
+      "failed": 2
+    },
+    "REFUND-INV-1": {
+      "tests": 0,
+      "failed": 0
+    }
+  },
+  "_expect": [
+    {
+      "id": "REFUND-INV-1",
+      "tests": 0,
+      "outcome": "non coperta"
+    },
+    {
+      "id": "REFUND-INV-5",
+      "tests": 2,
+      "outcome": "rossa"
+    },
+    {
+      "id": "REFUND-INV-2",
+      "tests": 1,
+      "outcome": "verde"
+    }
+  ]
+}

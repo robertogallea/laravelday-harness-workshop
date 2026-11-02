@@ -1,0 +1,40 @@
+{
+  "_why": "Un ParseError in un file di test rompe ogni pest --group prima di arrivare ai test: il JUnit dice 0 test e 1 rosso. Non è un test mancante (\"non coperta\" manderebbe l'agente a scrivere un test che c'è già): è \"rossa\".",
+  "_from": "lo stop e bin/receipt: un vendor/bin/pest --group=<ID> per invariante, contato dal JUnit (o l'evidence del contract, se lo esegue già)",
+  "contractIds": [
+    "REFUND-INV-1",
+    "REFUND-INV-2",
+    "REFUND-INV-3"
+  ],
+  "groupResults": {
+    "REFUND-INV-1": {
+      "tests": 0,
+      "failed": 1
+    },
+    "REFUND-INV-2": {
+      "tests": 0,
+      "failed": 1
+    },
+    "REFUND-INV-3": {
+      "tests": 0,
+      "failed": 1
+    }
+  },
+  "_expect": [
+    {
+      "id": "REFUND-INV-1",
+      "tests": 0,
+      "outcome": "rossa"
+    },
+    {
+      "id": "REFUND-INV-2",
+      "tests": 0,
+      "outcome": "rossa"
+    },
+    {
+      "id": "REFUND-INV-3",
+      "tests": 0,
+      "outcome": "rossa"
+    }
+  ]
+}

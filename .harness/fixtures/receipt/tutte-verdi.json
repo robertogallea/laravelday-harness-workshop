@@ -1,0 +1,70 @@
+{
+  "_why": "Run 2 riuscita: ogni invariante ha i suoi test, tutti verdi. Una riga per ID, con quanti test la provano.",
+  "_from": "lo stop e bin/receipt: un vendor/bin/pest --group=<ID> per invariante, contato dal JUnit (o l'evidence del contract, se lo esegue già)",
+  "contractIds": [
+    "REFUND-INV-1",
+    "REFUND-INV-2",
+    "REFUND-INV-3",
+    "REFUND-INV-4",
+    "REFUND-INV-5",
+    "REFUND-INV-6"
+  ],
+  "groupResults": {
+    "REFUND-INV-1": {
+      "tests": 2,
+      "failed": 0
+    },
+    "REFUND-INV-2": {
+      "tests": 4,
+      "failed": 0
+    },
+    "REFUND-INV-3": {
+      "tests": 1,
+      "failed": 0
+    },
+    "REFUND-INV-4": {
+      "tests": 1,
+      "failed": 0
+    },
+    "REFUND-INV-5": {
+      "tests": 3,
+      "failed": 0
+    },
+    "REFUND-INV-6": {
+      "tests": 1,
+      "failed": 0
+    }
+  },
+  "_expect": [
+    {
+      "id": "REFUND-INV-1",
+      "tests": 2,
+      "outcome": "verde"
+    },
+    {
+      "id": "REFUND-INV-2",
+      "tests": 4,
+      "outcome": "verde"
+    },
+    {
+      "id": "REFUND-INV-3",
+      "tests": 1,
+      "outcome": "verde"
+    },
+    {
+      "id": "REFUND-INV-4",
+      "tests": 1,
+      "outcome": "verde"
+    },
+    {
+      "id": "REFUND-INV-5",
+      "tests": 3,
+      "outcome": "verde"
+    },
+    {
+      "id": "REFUND-INV-6",
+      "tests": 1,
+      "outcome": "verde"
+    }
+  ]
+}
