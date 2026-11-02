@@ -49,19 +49,47 @@ return [
     // appena scritto, per nome. $tools sono i comandi di config.php → tools, per esempio
     // $tools['pint'] = ['php', 'vendor/bin/pint']: aggiungi il path in fondo.
     'commandsFor' => function (string $path, array $tools): array {
-        // E6 — TODO 1: solo i .php sotto app/, database/, tests/ (gli stessi path di phpstan.neon):
-        //   prima 'pint' (in modalità fix, che è il default), poi 'phpstan', entrambi sul solo $path.
-        //   Per tutto il resto (Markdown, Blade, routes/, config/) nessun comando: [].
-        return [];
+        // Gli stessi path di phpstan.neon. Blade finisce in .php ma è un template.
+        if (! preg_match('#^(app|database|tests)/.+\.php$#', $path) || str_ends_with($path, '.blade.php')) {
+            return [];
+        }
+
+        // Prima Pint, che riformatta: PHPStan deve vedere il file com'è dopo, righe comprese.
+        return [
+            'pint' => [...$tools['pint'], $path],
+            'phpstan' => [...$tools['phpstan'], $path],
+        ];
     },
 
     // fn (list<array> $results): ?string — dagli esiti al testo per l'agente (additionalContext).
     'feedback' => function (array $results): ?string {
-        // E6 — TODO 2: null se è tutto pulito. Altrimenti poche righe, al massimo 1500 caratteri:
-        //   - i file che Pint ha riformattato (changed): l'agente li deve rileggere prima di modificarli;
-        //   - gli errori di PHPStan (exit ≠ 0 e righe file:riga:messaggio), i primi 10 della tool call,
-        //     ciascuno con il file, la riga e il messaggio.
-        //   Uno strumento che non è partito (skipped) non è un problema dell'agente: taci.
-        return null;
+        $lines = [];
+        $shown = 0;
+        foreach ($results as $r) {
+            if ($r['skipped'] !== null) {
+                continue; // uno strumento che manca non è un problema dell'agente
+            }
+            if ($r['changed']) {
+                $lines[] = "Pint ha riformattato {$r['path']}: rileggilo prima di modificarlo di nuovo.";
+            }
+            if ($r['tool'] === 'phpstan' && $r['exit'] !== 0) {
+                preg_match_all('/^.+\.php:(\d+):(.+?)(?: \[identifier=[^\]]+\])?$/m', $r['output'], $m, PREG_SET_ORDER);
+                if ($m === []) {
+                    continue; // PHPStan non è riuscito a partire: lo dirà lo stop
+                }
+                $lines[] = "PHPStan, {$r['path']}: ".count($m).(count($m) === 1 ? ' errore' : ' errori');
+                foreach ($m as [, $line, $message]) {
+                    if (++$shown > 10) { // i primi 10 della tool call, non di ogni file
+                        $lines[] = "- … gli altri: vendor/bin/phpstan analyse {$r['path']}";
+                        break;
+                    }
+                    $lines[] = "- riga {$line}: {$message}";
+                }
+            }
+        }
+        $text = implode("\n", $lines);
+
+        // Il taglio lo decido io, non l'impianto: meglio perdere la coda di un messaggio che un file.
+        return $text === '' ? null : (mb_strlen($text) > 1500 ? mb_substr($text, 0, 1499).'…' : $text);
     },
 ];
