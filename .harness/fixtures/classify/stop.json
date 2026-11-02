@@ -1,0 +1,64 @@
+{
+  "_why": "Lo stop rosso porta già le sue classi (classes, dal receipt, in ordine di gravità): la classe dell'evento è la prima. Tre rossi di seguito: budget_exhausted.",
+  "cases": [
+    {
+      "in": {
+        "event": "stop.blocked",
+        "classes": [
+          "test_failure",
+          "missing_evidence"
+        ],
+        "attempt": 1,
+        "budget": 3
+      },
+      "class": "test_failure"
+    },
+    {
+      "in": {
+        "event": "stop.blocked",
+        "classes": [
+          "missing_evidence",
+          "progress_stale"
+        ],
+        "attempt": 2,
+        "budget": 3
+      },
+      "class": "missing_evidence"
+    },
+    {
+      "in": {
+        "event": "stop.blocked",
+        "classes": [
+          "protected_file",
+          "scope_violation",
+          "test_failure"
+        ],
+        "attempt": 1,
+        "budget": 3
+      },
+      "class": "protected_file"
+    },
+    {
+      "in": {
+        "event": "stop.blocked",
+        "classes": [
+          "progress_stale"
+        ],
+        "attempt": 1,
+        "budget": 3
+      },
+      "class": "progress_stale"
+    },
+    {
+      "in": {
+        "event": "stop.escalated",
+        "classes": [
+          "test_failure"
+        ],
+        "attempt": 3,
+        "budget": 3
+      },
+      "class": "budget_exhausted"
+    }
+  ]
+}

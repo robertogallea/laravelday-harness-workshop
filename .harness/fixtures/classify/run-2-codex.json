@@ -1,0 +1,317 @@
+{
+  "_why": "Il trace vero di una run 2 di Codex (2026-11-02, campi essenziali): 30 eventi, uno stop rosso per PHPStan (static_analysis) corretto al tentativo dopo. Il resto non è un fallimento.",
+  "cases": [
+    {
+      "in": {
+        "event": "session.started",
+        "source": "startup",
+        "task": "T-001"
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "Bash",
+        "files": []
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "Bash",
+        "files": []
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "Bash",
+        "files": []
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "Bash",
+        "files": []
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "apply_patch",
+        "files": [
+          "app/Enums/OrderStatus.php",
+          "app/Policies/OrderPolicy.php",
+          "app/Models/Refund.php",
+          "routes/web.php",
+          "app/Http/Controllers/Admin/OrderRefundController.php",
+          "app/Actions/Refunds/RefundPartially.php",
+          "database/migrations/2026_11_02_000000_add_partial_refunds_support.php"
+        ]
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "post_edit.checked",
+        "files": [
+          "app/Enums/OrderStatus.php",
+          "app/Policies/OrderPolicy.php",
+          "app/Models/Refund.php",
+          "routes/web.php",
+          "app/Http/Controllers/Admin/OrderRefundController.php"
+        ],
+        "commands": 8,
+        "skipped": [],
+        "pint_fixed": [],
+        "phpstan_errors": 0,
+        "context_chars": 0
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "Bash",
+        "files": []
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "apply_patch",
+        "files": [
+          "tests/Feature/Refunds/PartialRefundTest.php"
+        ]
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "post_edit.checked",
+        "files": [
+          "tests/Feature/Refunds/PartialRefundTest.php"
+        ],
+        "commands": 2,
+        "skipped": [],
+        "pint_fixed": [],
+        "phpstan_errors": 0,
+        "context_chars": 0
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "Bash",
+        "files": []
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "apply_patch",
+        "files": [
+          "tests/Feature/Refunds/PartialRefundTest.php"
+        ]
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "post_edit.checked",
+        "files": [
+          "tests/Feature/Refunds/PartialRefundTest.php"
+        ],
+        "commands": 2,
+        "skipped": [],
+        "pint_fixed": [],
+        "phpstan_errors": 0,
+        "context_chars": 0
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "Bash",
+        "files": []
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "Bash",
+        "files": []
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "apply_patch",
+        "files": [
+          ".harness/memory/progress.md"
+        ]
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "apply_patch",
+        "files": [
+          ".harness/memory/progress.md"
+        ]
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "post_edit.checked",
+        "files": [
+          ".harness/memory/progress.md"
+        ],
+        "commands": 0,
+        "skipped": [],
+        "pint_fixed": [],
+        "phpstan_errors": 0,
+        "context_chars": 0
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "Bash",
+        "files": []
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "apply_patch",
+        "files": [
+          ".harness/memory/progress.md"
+        ]
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "post_edit.checked",
+        "files": [
+          ".harness/memory/progress.md"
+        ],
+        "commands": 0,
+        "skipped": [],
+        "pint_fixed": [],
+        "phpstan_errors": 0,
+        "context_chars": 0
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "Bash",
+        "files": []
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "apply_patch",
+        "files": [
+          ".harness/memory/progress.md"
+        ]
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "post_edit.checked",
+        "files": [
+          ".harness/memory/progress.md"
+        ],
+        "commands": 0,
+        "skipped": [],
+        "pint_fixed": [],
+        "phpstan_errors": 0,
+        "context_chars": 0
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "stop.blocked",
+        "classes": [
+          "static_analysis"
+        ],
+        "attempt": 1,
+        "budget": 3
+      },
+      "class": "static_analysis"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "Bash",
+        "files": []
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "apply_patch",
+        "files": [
+          "app/Actions/Refunds/RefundPartially.php"
+        ]
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "post_edit.checked",
+        "files": [
+          "app/Actions/Refunds/RefundPartially.php"
+        ],
+        "commands": 2,
+        "skipped": [],
+        "pint_fixed": [],
+        "phpstan_errors": 0,
+        "context_chars": 0
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "Bash",
+        "files": []
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "stop.passed",
+        "classes": [],
+        "attempt": 0,
+        "budget": 3
+      },
+      "class": "none"
+    }
+  ]
+}

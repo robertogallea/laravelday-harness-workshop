@@ -1,0 +1,131 @@
+{
+  "_why": "Un deny del guard: la classe viene dall'id della regola (il prefisso basta per migration.*). Una regola che non conosci, come quella di L-003, è comunque un policy_block: mai unclassified.",
+  "cases": [
+    {
+      "in": {
+        "event": "pre_tool.denied",
+        "rule": "env.access",
+        "tool": "Read",
+        "files": [
+          ".env"
+        ],
+        "command": ""
+      },
+      "class": "protected_file"
+    },
+    {
+      "in": {
+        "event": "pre_tool.denied",
+        "rule": "task.must-not-change",
+        "tool": "Edit",
+        "files": [
+          "app/Services/RefundService.php"
+        ],
+        "command": ""
+      },
+      "class": "protected_file"
+    },
+    {
+      "in": {
+        "event": "pre_tool.denied",
+        "rule": "migration.edit-existing",
+        "tool": "apply_patch",
+        "files": [
+          "database/migrations/2025_03_04_101500_create_refunds_table.php"
+        ],
+        "command": ""
+      },
+      "class": "destructive_migration"
+    },
+    {
+      "in": {
+        "event": "pre_tool.denied",
+        "rule": "migration.destructive",
+        "tool": "Write",
+        "files": [
+          "database/migrations/2026_11_14_090000_allow_partial_refunds.php"
+        ],
+        "command": ""
+      },
+      "class": "destructive_migration"
+    },
+    {
+      "in": {
+        "event": "pre_tool.denied",
+        "rule": "migration.command",
+        "tool": "Bash",
+        "files": [],
+        "command": ""
+      },
+      "class": "destructive_migration"
+    },
+    {
+      "in": {
+        "event": "pre_tool.denied",
+        "rule": "task.out-of-scope",
+        "tool": "Write",
+        "files": [
+          "app/Services/PartialRefundService.php"
+        ],
+        "command": ""
+      },
+      "class": "scope_violation"
+    },
+    {
+      "in": {
+        "event": "pre_tool.denied",
+        "rule": "task.no-contract",
+        "tool": "Write",
+        "files": [
+          "app/Actions/Refunds/RefundOrderPartially.php"
+        ],
+        "command": ""
+      },
+      "class": "no_contract"
+    },
+    {
+      "in": {
+        "event": "pre_tool.denied",
+        "rule": "task.self-approval",
+        "tool": "Edit",
+        "files": [
+          ".harness/tasks/T-001.md"
+        ],
+        "command": ""
+      },
+      "class": "self_approval"
+    },
+    {
+      "in": {
+        "event": "pre_tool.denied",
+        "rule": "harness.tamper",
+        "tool": "Edit",
+        "files": [
+          ".harness/rules/guard.php"
+        ],
+        "command": ""
+      },
+      "class": "harness_tamper"
+    },
+    {
+      "in": {
+        "event": "pre_tool.denied",
+        "rule": "dependency.new",
+        "tool": "Bash",
+        "files": [],
+        "command": ""
+      },
+      "class": "policy_block"
+    },
+    {
+      "in": {
+        "event": "pre_tool.denied",
+        "rule": "l003.la-mia-regola",
+        "tool": "Bash",
+        "files": [],
+        "command": ""
+      },
+      "class": "policy_block"
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "_why": "Gli eventi che non sono fallimenti hanno la classe none: un'azione permessa, una sessione che parte, uno stop verde, saltato o in attesa dell'umano. [ATTESA-UMANO] non è un fallimento: è il protocollo.",
+  "cases": [
+    {
+      "in": {
+        "event": "pre_tool.allowed",
+        "tool": "Read",
+        "files": [
+          "app/Models/Order.php"
+        ],
+        "command": ""
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "session.started",
+        "source": "startup",
+        "task": "T-001",
+        "base": null
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "stop.passed",
+        "classes": [],
+        "attempt": 0,
+        "budget": 3
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "stop.skipped",
+        "why": "no-changes"
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "stop.waiting"
+      },
+      "class": "none"
+    }
+  ]
+}

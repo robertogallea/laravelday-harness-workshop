@@ -1,0 +1,119 @@
+{
+  "_why": "Il post-edit non blocca, ma il suo esito ha una classe: PHPStan prima di Pint (un errore di tipo conta più di una riformattazione), poi uno strumento che non è partito (env_unavailable). Tutto pulito: none.",
+  "cases": [
+    {
+      "in": {
+        "event": "post_edit.checked",
+        "files": [
+          "app/Models/Order.php"
+        ],
+        "commands": 2,
+        "skipped": [],
+        "pint_fixed": [],
+        "phpstan_errors": 2,
+        "context_chars": 180,
+        "ms": 900
+      },
+      "class": "static_analysis"
+    },
+    {
+      "in": {
+        "event": "post_edit.checked",
+        "files": [
+          "app/Models/Order.php"
+        ],
+        "commands": 2,
+        "skipped": [],
+        "pint_fixed": [
+          "app/Models/Order.php"
+        ],
+        "phpstan_errors": 1,
+        "context_chars": 200,
+        "ms": 900
+      },
+      "class": "static_analysis"
+    },
+    {
+      "in": {
+        "event": "post_edit.checked",
+        "files": [
+          "app/Models/Order.php"
+        ],
+        "commands": 2,
+        "skipped": [],
+        "pint_fixed": [
+          "app/Models/Order.php"
+        ],
+        "phpstan_errors": 0,
+        "context_chars": 90,
+        "ms": 900
+      },
+      "class": "lint"
+    },
+    {
+      "in": {
+        "event": "post_edit.checked",
+        "files": [
+          "app/Models/Order.php"
+        ],
+        "commands": 0,
+        "skipped": [
+          "pint: missing",
+          "phpstan: missing"
+        ],
+        "pint_fixed": [],
+        "phpstan_errors": 0,
+        "context_chars": 0,
+        "ms": 900
+      },
+      "class": "env_unavailable"
+    },
+    {
+      "in": {
+        "event": "post_edit.checked",
+        "files": [
+          "app/Models/Order.php"
+        ],
+        "commands": 2,
+        "skipped": [
+          "phpstan: timeout"
+        ],
+        "pint_fixed": [],
+        "phpstan_errors": 0,
+        "context_chars": 0,
+        "ms": 900
+      },
+      "class": "env_unavailable"
+    },
+    {
+      "in": {
+        "event": "post_edit.checked",
+        "files": [
+          "app/Models/Order.php"
+        ],
+        "commands": 2,
+        "skipped": [],
+        "pint_fixed": [],
+        "phpstan_errors": 0,
+        "context_chars": 0,
+        "ms": 900
+      },
+      "class": "none"
+    },
+    {
+      "in": {
+        "event": "post_edit.checked",
+        "files": [
+          "docs/contracts/refunds.partial.md"
+        ],
+        "commands": 0,
+        "skipped": [],
+        "pint_fixed": [],
+        "phpstan_errors": 0,
+        "context_chars": 0,
+        "ms": 900
+      },
+      "class": "none"
+    }
+  ]
+}

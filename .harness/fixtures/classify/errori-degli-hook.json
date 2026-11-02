@@ -1,0 +1,34 @@
+{
+  "_why": "Un hook andato in errore (*.error) è un fallimento dell'harness, non dell'agente: hook_error, qualunque sia l'hook.",
+  "cases": [
+    {
+      "in": {
+        "event": "pre_tool.error",
+        "tool": "Bash",
+        "message": "payload PreToolUse senza tool_name"
+      },
+      "class": "hook_error"
+    },
+    {
+      "in": {
+        "event": "post_edit.error",
+        "message": "rules/post-edit.php: syntax error"
+      },
+      "class": "hook_error"
+    },
+    {
+      "in": {
+        "event": "stop.error",
+        "message": "Allowed memory size exhausted"
+      },
+      "class": "hook_error"
+    },
+    {
+      "in": {
+        "event": "session.error",
+        "message": "progress.md illeggibile"
+      },
+      "class": "hook_error"
+    }
+  ]
+}
