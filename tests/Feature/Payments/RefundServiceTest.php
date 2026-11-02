@@ -19,7 +19,7 @@ it('lets support refund an order in full', function () {
         ->and($order->fresh()->status)->toBe(OrderStatus::Refunded);
 
     $this->payments->assertRefunded($order->gateway_charge_id, 1990);
-});
+})->group('REFUND-FULL-INV-1', 'ORDER-INV-1');
 
 it('does not let a customer refund an order', function () {
     $customer = User::factory()->create();
@@ -30,7 +30,7 @@ it('does not let a customer refund an order', function () {
 
     expect($order->fresh()->status)->toBe(OrderStatus::Paid);
     $this->payments->assertNothingRefunded();
-});
+})->group('REFUND-FULL-INV-1');
 
 it('does not refund an order twice', function () {
     $finance = User::factory()->finance()->create();
@@ -43,7 +43,7 @@ it('does not refund an order twice', function () {
 
     expect($order->refunds()->count())->toBe(1)
         ->and($this->payments->refundsFor($order->gateway_charge_id))->toHaveCount(1);
-});
+})->group('REFUND-FULL-INV-2');
 
 it('notifies the customer', function () {
     Notification::fake();

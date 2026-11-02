@@ -17,7 +17,7 @@ it('refunds an order from the back office', function () {
 
     expect($order->fresh()->status)->toBe(OrderStatus::Refunded);
     $payments->assertRefunded($order->gateway_charge_id, 3200);
-});
+})->group('REFUND-FULL-INV-1');
 
 it('shows the order to staff', function () {
     $order = Order::factory()->paid()->create(['amount' => 1250]);
