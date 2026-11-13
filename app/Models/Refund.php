@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-#[Fillable(['order_id', 'amount', 'gateway_refund_id', 'refunded_by'])]
+#[Fillable(['order_id', 'amount', 'reason', 'idempotency_key', 'gateway_refund_id', 'refunded_by'])]
 class Refund extends Model
 {
     /** @use HasFactory<RefundFactory> */
@@ -38,5 +38,12 @@ class Refund extends Model
     public function refundedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'refunded_by');
+    }
+
+    public function amountInCents(): int
+    {
+        [$euros, $cents] = array_pad(explode('.', (string) $this->getRawOriginal('amount'), 2), 2, '0');
+
+        return ((int) $euros * 100) + (int) str_pad($cents, 2, '0');
     }
 }

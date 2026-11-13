@@ -22,6 +22,6 @@ class OrderPolicy
     public function refund(User $user, Order $order): bool
     {
         return in_array($user->role, [Role::Finance, Role::Admin], true)
-            && $order->status === OrderStatus::Paid;
+            && in_array($order->status, [OrderStatus::Paid, OrderStatus::PartiallyRefunded], true);
     }
 }
