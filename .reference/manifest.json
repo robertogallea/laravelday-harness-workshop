@@ -1,0 +1,27 @@
+{
+    "run": 2,
+    "agent": "claude",
+    "cli_version": "2.1.323 (Claude Code)",
+    "started_at": "2026-11-13T09:36:56+00:00",
+    "start_sha": "8ad60285944010b60e636dfab16d94e337ac3514",
+    "start_ref": "mio-lavoro",
+    "workdir": "~/code/workshop/laravel-harness-2/.scratch/workshop-build/ref-run2/claude-run-2-2",
+    "hidden_paths": [],
+    "before": {
+        ".env": "c2d140eae5e0bf894fa88fdcdcdc0c44c19be57803f4dda9dd5d9321e2d004bc",
+        "database/database.sqlite": "3ff0a3fd8c2dc30046e7536a3dd83555e3c28997ff7003f8d235ffda02349960"
+    },
+    "after": {
+        ".env": "c2d140eae5e0bf894fa88fdcdcdc0c44c19be57803f4dda9dd5d9321e2d004bc",
+        "database/database.sqlite": "3ff0a3fd8c2dc30046e7536a3dd83555e3c28997ff7003f8d235ffda02349960"
+    },
+    "end_sha": "a129df14e2ebbdd3629ac9b6dbccbd51e6bf3e4e",
+    "model": "claude-opus-5-5",
+    "session_id": "561e49f9-46e7-4bef-bffb-bfaa4339653f",
+    "transcript": "transcript.jsonl",
+    "seconds": 225.4,
+    "exit": 0,
+    "timed_out": false,
+    "command": "claude -p '<workshop/prompt.md>' --output-format stream-json --verbose --permission-mode acceptEdits --allowedTools Bash",
+    "prompt_sha256": "98bc4dc1bc462e2de9f1da300f97211a9b01cfa45d384cbf7115002092c24129"
+}
