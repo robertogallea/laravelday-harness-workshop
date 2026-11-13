@@ -1,0 +1,16 @@
+{
+    "agent": "codex",
+    "model": "gpt-5.6-terra",
+    "session_id": "01a1d448-61c8-7ff3-a55c-0bc736609f7e",
+    "requests": 18,
+    "tool_calls": 17,
+    "input_tokens": 558833,
+    "cached_tokens": 508672,
+    "output_tokens": 10756,
+    "cost_usd": 0.33112840000000004,
+    "cost_source": "listino",
+    "num_turns": null,
+    "completed": true,
+    "final_message": "Implementato il rimborso parziale admin.\n\n- Nuovo `POST /admin/orders/{order}/refunds`, con `amount`, `reason` e header `Idempotency-Key`.\n- Nuova Action transazionale: rimborso gateway, riga refund, stato ordine, audit; notifica solo dopo commit.\n- Supportati rimborsi multipli fino al totale, con stato `partially_refunded`.\n- Idempotenza per ordine/chiave e migrazione per rimuovere l’unicità del solo `order_id`.\n- Il rimborso totale legacy `/refund` è invariato.\n- Aggiunti test per autorizzazione, saldo, audit, notifiche e idempotenza.\n\nVerifica completata: `REFUND-INV-1` … `REFUND-INV-6` tutti verdi, più suite completa: 30 test, 111 assertion.",
+    "seconds": 330.9
+}

@@ -1,0 +1,27 @@
+{
+    "run": 2,
+    "agent": "codex",
+    "cli_version": "codex-cli 0.162.1",
+    "started_at": "2026-11-13T09:41:15+00:00",
+    "start_sha": "8ad60285944010b60e636dfab16d94e337ac3514",
+    "start_ref": "mio-lavoro",
+    "workdir": "~/code/workshop/laravel-harness-2/.scratch/workshop-build/ref-run2/codex-run-2-1",
+    "hidden_paths": [],
+    "before": {
+        ".env": "c83f22b41589ccdf9c512cc130a323ee7ed385ef5aec51de9cce4ce0ad6b5821",
+        "database/database.sqlite": "4caf26ffedbb7e1e35bb812609693261cb6f96ff7ccc356bdf3051118f5dc2bc"
+    },
+    "after": {
+        ".env": "c83f22b41589ccdf9c512cc130a323ee7ed385ef5aec51de9cce4ce0ad6b5821",
+        "database/database.sqlite": "4caf26ffedbb7e1e35bb812609693261cb6f96ff7ccc356bdf3051118f5dc2bc"
+    },
+    "end_sha": "c43dab7c9e7d63b9a86809ce4e5add80bccdd9b0",
+    "model": "gpt-5.6-terra",
+    "session_id": "01a1d448-61c8-7ff3-a55c-0bc736609f7e",
+    "transcript": "transcript.jsonl",
+    "seconds": 330.9,
+    "exit": 0,
+    "timed_out": false,
+    "command": "codex exec --json --sandbox danger-full-access -c 'approval_policy=\"never\"' --dangerously-bypass-hook-trust '<workshop/prompt.md>'",
+    "prompt_sha256": "98bc4dc1bc462e2de9f1da300f97211a9b01cfa45d384cbf7115002092c24129"
+}

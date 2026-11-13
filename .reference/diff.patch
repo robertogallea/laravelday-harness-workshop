@@ -1,0 +1,425 @@
+diff --git a/.harness/memory/progress.md b/.harness/memory/progress.md
+index 8774f0e..472dd18 100644
+--- a/.harness/memory/progress.md
++++ b/.harness/memory/progress.md
+@@ -1,6 +1,6 @@
+ ---
+ task: T-001
+-updated: 2026-11-14T09:30
++updated: 2026-11-13T09:45
+ ---
+ 
+ # Progress
+@@ -9,12 +9,16 @@ # Progress
+ 
+ ## Stato
+ 
+-T-001 in negoziazione: contract in bozza, nessun codice scritto.
++T-001 completato: il rimborso parziale passa da `RefundPartially`, aggiorna stato, audit e notifica dopo commit. Coperti e verdi REFUND-INV-1..6 e suite completa.
+ 
+ ## Prossimo passo
+ 
+-Far approvare `.harness/tasks/T-001.md`, poi leggere `docs/contracts/refunds.partial.md`.
++Nessuno: task completato.
+ 
+ ## Conflicts incontrati
+ 
++Il rimborso totale resta nel `RefundService` legacy (C1/C2/C4), intenzionalmente non modificato.
++
+ ## Rischi aperti
++
++Nessuno noto: eseguite tutte le evidence richieste su SQLite in memoria.
+diff --git a/app/Actions/Refunds/RefundPartially.php b/app/Actions/Refunds/RefundPartially.php
+new file mode 100644
+index 0000000..f6ea742
+--- /dev/null
++++ b/app/Actions/Refunds/RefundPartially.php
+@@ -0,0 +1,84 @@
++<?php
++
++namespace App\Actions\Refunds;
++
++use App\Actions\Audit\RecordAuditEntry;
++use App\Enums\OrderStatus;
++use App\Events\OrderRefunded;
++use App\Models\Order;
++use App\Models\Refund;
++use App\Models\User;
++use App\Payments\PaymentGateway;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Validation\ValidationException;
++
++/**
++ * Issues a partial refund against a paid order.
++ *
++ * @contract docs/contracts/refunds.partial.md
++ */
++final class RefundPartially
++{
++    public function __construct(
++        private PaymentGateway $gateway,
++        private RecordAuditEntry $audit,
++    ) {}
++
++    public function handle(Order $order, User $actor, int $amount, string $reason, string $idempotencyKey): Refund
++    {
++        $existing = $order->refunds()
++            ->where('idempotency_key', $idempotencyKey)
++            ->first();
++
++        if ($existing !== null) {
++            if ($existing->amountInCents() !== $amount) {
++                // Let the gateway enforce its idempotency contract for a reused
++                // key with different payment parameters.
++                $this->gateway->refund($order->gateway_charge_id, $amount, $idempotencyKey);
++            }
++
++            return $existing;
++        }
++
++        $refundedCents = $order->refunds->sum(fn (Refund $refund): int => $refund->amountInCents());
++
++        if ($amount > $order->amount - $refundedCents) {
++            throw ValidationException::withMessages([
++                'amount' => 'The amount exceeds the refundable balance.',
++            ]);
++        }
++
++        $gatewayRefund = $this->gateway->refund($order->gateway_charge_id, $amount, $idempotencyKey);
++
++        $refund = DB::transaction(function () use ($order, $actor, $amount, $reason, $idempotencyKey, $gatewayRefund): Refund {
++            $refund = $order->refunds()->create([
++                'amount' => $amount / 100,
++                'reason' => $reason,
++                'idempotency_key' => $idempotencyKey,
++                'gateway_refund_id' => $gatewayRefund->id,
++                'refunded_by' => $actor->id,
++            ]);
++
++            $totalRefundedCents = $order->refunds()->get()
++                ->sum(fn (Refund $item): int => $item->amountInCents());
++
++            $order->update([
++                'status' => $totalRefundedCents === $order->amount
++                    ? OrderStatus::Refunded
++                    : OrderStatus::PartiallyRefunded,
++            ]);
++
++            $this->audit->handle($actor, 'order.partially_refunded', $refund, [
++                'reason' => $reason,
++                'idempotency_key' => $idempotencyKey,
++                'gateway_refund_id' => $gatewayRefund->id,
++            ]);
++
++            return $refund;
++        });
++
++        OrderRefunded::dispatch($order->fresh(), $refund);
++
++        return $refund;
++    }
++}
+diff --git a/app/Enums/OrderStatus.php b/app/Enums/OrderStatus.php
+index cd7f23a..b70b3b0 100644
+--- a/app/Enums/OrderStatus.php
++++ b/app/Enums/OrderStatus.php
+@@ -6,6 +6,7 @@ enum OrderStatus: string
+ {
+     case Pending = 'pending';
+     case Paid = 'paid';
++    case PartiallyRefunded = 'partially_refunded';
+     case Cancelled = 'cancelled';
+     case Refunded = 'refunded';
+ }
+diff --git a/app/Http/Controllers/Admin/OrderRefundController.php b/app/Http/Controllers/Admin/OrderRefundController.php
+index 3fd8d11..7eb35c9 100644
+--- a/app/Http/Controllers/Admin/OrderRefundController.php
++++ b/app/Http/Controllers/Admin/OrderRefundController.php
+@@ -2,11 +2,14 @@
+ 
+ namespace App\Http\Controllers\Admin;
+ 
++use App\Actions\Refunds\RefundPartially;
+ use App\Http\Controllers\Controller;
++use App\Http\Requests\StorePartialRefundRequest;
+ use App\Models\Order;
+ use App\Services\RefundService;
+ use Illuminate\Http\RedirectResponse;
+ use Illuminate\Http\Request;
++use Illuminate\Support\Facades\Gate;
+ 
+ class OrderRefundController extends Controller
+ {
+@@ -16,4 +19,19 @@ public function store(Order $order, Request $request, RefundService $refunds): R
+ 
+         return back()->with('status', 'Ordine rimborsato.');
+     }
++
++    public function storePartial(Order $order, StorePartialRefundRequest $request, RefundPartially $refunds): RedirectResponse
++    {
++        Gate::authorize('refund', $order);
++
++        $refunds->handle(
++            $order,
++            $request->user(),
++            $request->integer('amount'),
++            $request->string('reason')->toString(),
++            $request->header('Idempotency-Key'),
++        );
++
++        return back()->with('status', 'Rimborso emesso.');
++    }
+ }
+diff --git a/app/Http/Requests/StorePartialRefundRequest.php b/app/Http/Requests/StorePartialRefundRequest.php
+new file mode 100644
+index 0000000..c117222
+--- /dev/null
++++ b/app/Http/Requests/StorePartialRefundRequest.php
+@@ -0,0 +1,24 @@
++<?php
++
++namespace App\Http\Requests;
++
++use Illuminate\Foundation\Http\FormRequest;
++
++class StorePartialRefundRequest extends FormRequest
++{
++    public function authorize(): bool
++    {
++        return true;
++    }
++
++    /**
++     * @return array<string, array<int, string>>
++     */
++    public function rules(): array
++    {
++        return [
++            'amount' => ['required', 'integer', 'min:1'],
++            'reason' => ['required', 'string'],
++        ];
++    }
++}
+diff --git a/app/Models/Refund.php b/app/Models/Refund.php
+index 2c6cc87..5fad4be 100644
+--- a/app/Models/Refund.php
++++ b/app/Models/Refund.php
+@@ -8,7 +8,7 @@
+ use Illuminate\Database\Eloquent\Model;
+ use Illuminate\Database\Eloquent\Relations\BelongsTo;
+ 
+-#[Fillable(['order_id', 'amount', 'gateway_refund_id', 'refunded_by'])]
++#[Fillable(['order_id', 'amount', 'reason', 'idempotency_key', 'gateway_refund_id', 'refunded_by'])]
+ class Refund extends Model
+ {
+     /** @use HasFactory<RefundFactory> */
+@@ -39,4 +39,11 @@ public function refundedBy(): BelongsTo
+     {
+         return $this->belongsTo(User::class, 'refunded_by');
+     }
++
++    public function amountInCents(): int
++    {
++        [$euros, $cents] = array_pad(explode('.', (string) $this->getRawOriginal('amount'), 2), 2, '0');
++
++        return ((int) $euros * 100) + (int) str_pad($cents, 2, '0');
++    }
+ }
+diff --git a/app/Policies/OrderPolicy.php b/app/Policies/OrderPolicy.php
+index f5f9b55..c552782 100644
+--- a/app/Policies/OrderPolicy.php
++++ b/app/Policies/OrderPolicy.php
+@@ -22,6 +22,6 @@ public function cancel(User $user, Order $order): bool
+     public function refund(User $user, Order $order): bool
+     {
+         return in_array($user->role, [Role::Finance, Role::Admin], true)
+-            && $order->status === OrderStatus::Paid;
++            && in_array($order->status, [OrderStatus::Paid, OrderStatus::PartiallyRefunded], true);
+     }
+ }
+diff --git a/database/migrations/2026_11_13_000000_add_partial_refunds_support.php b/database/migrations/2026_11_13_000000_add_partial_refunds_support.php
+new file mode 100644
+index 0000000..b9c33fb
+--- /dev/null
++++ b/database/migrations/2026_11_13_000000_add_partial_refunds_support.php
+@@ -0,0 +1,27 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++return new class extends Migration
++{
++    public function up(): void
++    {
++        Schema::table('refunds', function (Blueprint $table) {
++            $table->dropUnique(['order_id']);
++            $table->string('reason')->nullable()->after('amount');
++            $table->string('idempotency_key')->nullable()->after('reason');
++            $table->unique(['order_id', 'idempotency_key']);
++        });
++    }
++
++    public function down(): void
++    {
++        Schema::table('refunds', function (Blueprint $table) {
++            $table->dropUnique(['order_id', 'idempotency_key']);
++            $table->dropColumn(['reason', 'idempotency_key']);
++            $table->unique('order_id');
++        });
++    }
++};
+diff --git a/routes/web.php b/routes/web.php
+index c76ee57..f34b031 100644
+--- a/routes/web.php
++++ b/routes/web.php
+@@ -14,5 +14,8 @@
+     Route::prefix('admin')->name('admin.')->group(function () {
+         Route::get('/orders/{order}', [Admin\OrderController::class, 'show'])->name('orders.show');
+         Route::post('/orders/{order}/refund', [Admin\OrderRefundController::class, 'store'])->name('orders.refund');
++        Route::post('/orders/{order}/refunds', [Admin\OrderRefundController::class, 'storePartial'])
++            ->middleware('idempotent')
++            ->name('orders.refunds.store');
+     });
+ });
+diff --git a/tests/Feature/Refunds/PartialRefundTest.php b/tests/Feature/Refunds/PartialRefundTest.php
+new file mode 100644
+index 0000000..682d400
+--- /dev/null
++++ b/tests/Feature/Refunds/PartialRefundTest.php
+@@ -0,0 +1,134 @@
++<?php
++
++use App\Enums\OrderStatus;
++use App\Models\AuditEntry;
++use App\Models\Order;
++use App\Models\Refund;
++use App\Models\User;
++use App\Notifications\RefundIssued;
++use Illuminate\Support\Facades\Notification;
++
++function partialRefundRequest(User $actor, Order $order, int $amount, string $key, string $reason = 'Customer request')
++{
++    return test()->actingAs($actor)
++        ->from("/admin/orders/{$order->id}")
++        ->withHeader('Idempotency-Key', $key)
++        ->post("/admin/orders/{$order->id}/refunds", [
++            'amount' => $amount,
++            'reason' => $reason,
++        ]);
++}
++
++it('allows finance and admin, but not support or customers, to issue partial refunds', function () {
++    $payments = $this->fakePayments();
++    $order = Order::factory()->paid()->create(['amount' => 3200]);
++
++    partialRefundRequest(User::factory()->support()->create(), $order, 500, 'support-key')
++        ->assertForbidden();
++    partialRefundRequest(User::factory()->create(), $order, 500, 'customer-key')
++        ->assertForbidden();
++
++    partialRefundRequest(User::factory()->finance()->create(), $order, 500, 'finance-key')
++        ->assertRedirect("/admin/orders/{$order->id}");
++    partialRefundRequest(User::factory()->admin()->create(), $order->fresh(), 500, 'admin-key')
++        ->assertRedirect("/admin/orders/{$order->id}");
++
++    expect($order->refunds()->count())->toBe(2);
++    $payments->assertRefunded($order->gateway_charge_id, 500);
++})->group('REFUND-INV-1');
++
++it('rejects invalid amounts, amounts over the refundable balance, and non-refundable orders', function () {
++    $payments = $this->fakePayments();
++    $finance = User::factory()->finance()->create();
++    $order = Order::factory()->paid()->create(['amount' => 1000]);
++
++    $this->actingAs($finance)
++        ->withHeader('Idempotency-Key', 'invalid-amount')
++        ->postJson("/admin/orders/{$order->id}/refunds", ['amount' => 0, 'reason' => 'No'])
++        ->assertUnprocessable();
++    partialRefundRequest($finance, $order, 700, 'first-refund')->assertRedirect();
++    $this->actingAs($finance)
++        ->withHeader('Idempotency-Key', 'over-balance')
++        ->postJson("/admin/orders/{$order->id}/refunds", ['amount' => 301, 'reason' => 'Too much'])
++        ->assertUnprocessable();
++
++    partialRefundRequest($finance, Order::factory()->cancelled()->create(), 100, 'cancelled-order')
++        ->assertForbidden();
++
++    expect($order->fresh()->status)->toBe(OrderStatus::PartiallyRefunded)
++        ->and($order->refunds()->count())->toBe(1);
++    $payments->assertRefunded($order->gateway_charge_id, 700);
++})->group('REFUND-INV-2');
++
++it('records the refund, order state, and audit entry together', function () {
++    $this->fakePayments();
++    $actor = User::factory()->finance()->create();
++    $order = Order::factory()->paid()->create(['amount' => 1000]);
++
++    partialRefundRequest($actor, $order, 1000, 'audit-key', 'Damaged parcel')->assertRedirect();
++
++    $refund = Refund::sole();
++    $audit = AuditEntry::sole();
++
++    expect($order->fresh()->status)->toBe(OrderStatus::Refunded)
++        ->and($refund->amount)->toBe('10.00')
++        ->and($refund->reason)->toBe('Damaged parcel')
++        ->and($audit->actor_id)->toBe($actor->id)
++        ->and($audit->subject_id)->toBe($refund->id)
++        ->and($audit->payload)->toMatchArray([
++            'reason' => 'Damaged parcel',
++            'idempotency_key' => 'audit-key',
++            'gateway_refund_id' => $refund->gateway_refund_id,
++        ]);
++})->group('REFUND-INV-3', 'REFUND-INV-6');
++
++it('notifies the customer only after a successful partial refund', function () {
++    Notification::fake();
++    $this->fakePayments();
++    $order = Order::factory()->paid()->create();
++
++    partialRefundRequest(User::factory()->finance()->create(), $order, 100, 'notification-key')->assertRedirect();
++
++    Notification::assertSentTo($order->user, RefundIssued::class);
++})->group('REFUND-INV-4');
++
++it('is idempotent per order and passes the client key to the gateway', function () {
++    $payments = $this->fakePayments();
++    $actor = User::factory()->finance()->create();
++    $order = Order::factory()->paid()->create(['amount' => 1000]);
++
++    partialRefundRequest($actor, $order, 200, 'same-key')->assertRedirect();
++    partialRefundRequest($actor, $order->fresh(), 200, 'same-key')->assertRedirect();
++    partialRefundRequest($actor, $order->fresh(), 300, 'different-key')->assertRedirect();
++
++    expect($order->refunds()->count())->toBe(2)
++        ->and(AuditEntry::count())->toBe(2)
++        ->and($payments->refundsFor($order->gateway_charge_id))->toHaveCount(2)
++        ->and($payments->refundsByKey())->toHaveKeys(['same-key', 'different-key']);
++})->group('REFUND-INV-5');
++
++it('requires an idempotency key before making a refund', function () {
++    $payments = $this->fakePayments();
++    $order = Order::factory()->paid()->create();
++
++    $this->actingAs(User::factory()->finance()->create())
++        ->postJson("/admin/orders/{$order->id}/refunds", ['amount' => 100, 'reason' => 'Missing key'])
++        ->assertBadRequest();
++
++    expect(Refund::count())->toBe(0);
++    $payments->assertNothingRefunded();
++})->group('REFUND-INV-5');
++
++it('does not create another refund when a key is reused with a different amount', function () {
++    $this->fakePayments();
++    $actor = User::factory()->finance()->create();
++    $order = Order::factory()->paid()->create(['amount' => 1000]);
++
++    partialRefundRequest($actor, $order, 200, 'reused-key')->assertRedirect();
++
++    partialRefundRequest($actor, $order->fresh(), 300, 'reused-key')
++        ->assertServerError();
++
++    expect(Refund::count())->toBe(1)
++        ->and(AuditEntry::count())->toBe(1);
++})->group('REFUND-INV-5');
