@@ -48,4 +48,20 @@ class Order extends Model
     {
         return $this->hasMany(Refund::class);
     }
+
+    /**
+     * Sum of the refunds already issued, in cents (refunds.amount is in euros: C3).
+     */
+    public function refundedCents(): int
+    {
+        return $this->refunds()->get()->sum(fn (Refund $refund) => $refund->amountInCents());
+    }
+
+    /**
+     * Saldo rimborsabile: what can still be refunded, in cents.
+     */
+    public function refundableCents(): int
+    {
+        return max(0, $this->amount - $this->refundedCents());
+    }
 }
