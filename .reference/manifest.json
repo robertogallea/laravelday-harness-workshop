@@ -1,0 +1,30 @@
+{
+    "run": 1,
+    "agent": "claude",
+    "cli_version": "2.1.327 (Claude Code)",
+    "started_at": "2026-11-18T18:54:32+00:00",
+    "start_sha": "b88f264665e53116cd0dadae9faeb75096412718",
+    "start_ref": "cp-00",
+    "workdir": "/tmp/orders-back-office-eb1410",
+    "hidden_paths": [
+        ".harness",
+        "workshop/esercizi"
+    ],
+    "before": {
+        ".env": "4b4aff0bcc7e31af4089f74a19317ae781b4aa1d88a22cae195098b4517e13eb",
+        "database/database.sqlite": "589c69d293f4bd5c9008ae43586eef32a2cf433dd34d75ba8205e1649d23b95a"
+    },
+    "after": {
+        ".env": "4b4aff0bcc7e31af4089f74a19317ae781b4aa1d88a22cae195098b4517e13eb",
+        "database/database.sqlite": "589c69d293f4bd5c9008ae43586eef32a2cf433dd34d75ba8205e1649d23b95a"
+    },
+    "model": "claude-opus-5-5",
+    "session_id": "f31f3503-53e4-40f1-be49-e911be3d4696",
+    "transcript": "transcript.jsonl",
+    "seconds": 119,
+    "exit": 0,
+    "timed_out": false,
+    "command": "claude -p '<workshop/prompt.md>' --output-format stream-json --verbose --permission-mode acceptEdits --allowedTools Bash",
+    "prompt_sha256": "98bc4dc1bc462e2de9f1da300f97211a9b01cfa45d384cbf7115002092c24129",
+    "end_sha": "f213a8ef4908502e19fef0c8845229a12677a179"
+}
