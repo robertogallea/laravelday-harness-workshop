@@ -14,5 +14,6 @@ Route::middleware('auth')->group(function () {
     Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('/orders/{order}', [Admin\OrderController::class, 'show'])->name('orders.show');
         Route::post('/orders/{order}/refund', [Admin\OrderRefundController::class, 'store'])->name('orders.refund');
+        Route::post('/orders/{order}/refunds', [Admin\OrderPartialRefundController::class, 'store'])->name('orders.refunds.store');
     });
 });
