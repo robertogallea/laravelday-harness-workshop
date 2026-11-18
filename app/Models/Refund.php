@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-#[Fillable(['order_id', 'amount', 'gateway_refund_id', 'refunded_by'])]
+#[Fillable(['order_id', 'amount', 'reason', 'gateway_refund_id', 'refunded_by'])]
 class Refund extends Model
 {
     /** @use HasFactory<RefundFactory> */

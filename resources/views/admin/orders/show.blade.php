@@ -31,13 +31,14 @@
             <h2>Rimborsi</h2>
             <table>
                 <thead>
-                    <tr><th>Data</th><th>Importo</th><th>Operatore</th><th>Riferimento</th></tr>
+                    <tr><th>Data</th><th>Importo</th><th>Motivazione</th><th>Operatore</th><th>Riferimento</th></tr>
                 </thead>
                 <tbody>
                     @foreach ($order->refunds as $refund)
                         <tr>
                             <td>{{ $refund->created_at->format('d/m/Y H:i') }}</td>
                             <td>{{ Number::currency((float) $refund->amount, $order->currency, 'it') }}</td>
+                            <td>{{ $refund->reason ?? '—' }}</td>
                             <td>{{ $refund->refundedBy->name }}</td>
                             <td>{{ $refund->gateway_refund_id }}</td>
                         </tr>

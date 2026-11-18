@@ -45,6 +45,44 @@ it('does not refund an order twice', function () {
         ->and($this->payments->refundsFor($order->gateway_charge_id))->toHaveCount(1);
 });
 
+it('allows several partial refunds up to the order amount', function () {
+    $finance = User::factory()->finance()->create();
+    $order = Order::factory()->paid()->create(['amount' => 1990]);
+
+    app(RefundService::class)->refundPartially($order, $finance, 500, 'Sconto post-vendita');
+    app(RefundService::class)->refundPartially($order->fresh(), $finance, 1490, 'Ordine completato');
+
+    expect($order->fresh()->status)->toBe(OrderStatus::Refunded)
+        ->and($order->refunds)->toHaveCount(2);
+    $this->payments->assertRefunded($order->gateway_charge_id, 500);
+    $this->payments->assertRefunded($order->gateway_charge_id, 1490);
+});
+
+it('does not allow a partial refund to exceed the remaining amount', function () {
+    $finance = User::factory()->finance()->create();
+    $order = Order::factory()->paid()->create(['amount' => 1990]);
+
+    app(RefundService::class)->refundPartially($order, $finance, 500, 'Sconto post-vendita');
+
+    expect(fn () => app(RefundService::class)->refundPartially($order->fresh(), $finance, 1500, 'Troppo alto'))
+        ->toThrow(DomainException::class);
+
+    expect($order->refunds)->toHaveCount(1)
+        ->and($this->payments->refundsFor($order->gateway_charge_id))->toHaveCount(1);
+});
+
+it('refunds only the remainder when a full refund follows a partial one', function () {
+    $finance = User::factory()->finance()->create();
+    $order = Order::factory()->paid()->create(['amount' => 1990]);
+
+    app(RefundService::class)->refundPartially($order, $finance, 500, 'Sconto post-vendita');
+    app(RefundService::class)->refundInFull($order->fresh(), $finance);
+
+    expect($order->fresh()->status)->toBe(OrderStatus::Refunded)
+        ->and($order->refunds)->toHaveCount(2);
+    $this->payments->assertRefunded($order->gateway_charge_id, 1490);
+});
+
 it('notifies the customer', function () {
     Notification::fake();
     $order = Order::factory()->paid()->create();
