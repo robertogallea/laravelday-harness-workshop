@@ -1,0 +1,30 @@
+{
+    "run": 1,
+    "agent": "codex",
+    "cli_version": "codex-cli 0.162.1",
+    "started_at": "2026-11-18T18:51:39+00:00",
+    "start_sha": "b88f264665e53116cd0dadae9faeb75096412718",
+    "start_ref": "cp-00",
+    "workdir": "/tmp/orders-back-office-e00db4",
+    "hidden_paths": [
+        ".harness",
+        "workshop/esercizi"
+    ],
+    "before": {
+        ".env": "8fbaaf8b53e34619c96c006a5d33a4881f973c43ad0360c699da96f6a6811299",
+        "database/database.sqlite": "32ba6561363c466cfa430389674136708a64a847c8803aadb0d67bf458cb3e65"
+    },
+    "after": {
+        ".env": "8fbaaf8b53e34619c96c006a5d33a4881f973c43ad0360c699da96f6a6811299",
+        "database/database.sqlite": "32ba6561363c466cfa430389674136708a64a847c8803aadb0d67bf458cb3e65"
+    },
+    "model": "gpt-5.6-terra",
+    "session_id": "01a1f000-146a-78c2-86d6-85c2715821b8",
+    "transcript": "transcript.jsonl",
+    "seconds": 166.2,
+    "exit": 0,
+    "timed_out": false,
+    "command": "codex exec --json --sandbox danger-full-access -c 'approval_policy=\"never\"' --dangerously-bypass-hook-trust '<workshop/prompt.md>'",
+    "prompt_sha256": "98bc4dc1bc462e2de9f1da300f97211a9b01cfa45d384cbf7115002092c24129",
+    "end_sha": "ee5b0e3eeae7266c38c90586e747ef588b221b49"
+}

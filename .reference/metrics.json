@@ -1,0 +1,16 @@
+{
+    "agent": "codex",
+    "model": "gpt-5.6-terra",
+    "session_id": "01a1f000-146a-78c2-86d6-85c2715821b8",
+    "requests": 10,
+    "tool_calls": 9,
+    "input_tokens": 321051,
+    "cached_tokens": 275200,
+    "output_tokens": 5442,
+    "cost_usd": 0.212046,
+    "cost_source": "listino",
+    "num_turns": null,
+    "completed": true,
+    "final_message": "Completato il rimborso parziale dal back office.\n\n- Aggiunto `POST /admin/orders/{order}/refunds` con validazione di `amount` (centesimi, > 0) e `reason`.\n- Registrati più rimborsi per ordine, inclusa la motivazione.\n- Impedito il rimborso oltre l’importo residuo.\n- L’ordine resta `paid` dopo un parziale e diventa `refunded` quando il totale rimborsato raggiunge l’importo dell’ordine.\n- Il rimborso totale esistente (`/refund`) resta compatibile e, dopo un parziale, rimborsa soltanto il residuo.\n- Aggiornata la vista amministrativa per mostrare la motivazione.\n\nVerifiche eseguite:\n\n- `php artisan test --compact` — 28 test superati.\n- `vendor/bin/pint --test` — formattazione superata.\n- Verificata la route registrata con `php artisan route:list`.",
+    "seconds": 166.2
+}

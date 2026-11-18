@@ -1,0 +1,259 @@
+diff --git a/app/Http/Controllers/Admin/OrderRefundController.php b/app/Http/Controllers/Admin/OrderRefundController.php
+index 3fd8d11..919968d 100644
+--- a/app/Http/Controllers/Admin/OrderRefundController.php
++++ b/app/Http/Controllers/Admin/OrderRefundController.php
+@@ -16,4 +16,16 @@ public function store(Order $order, Request $request, RefundService $refunds): R
+ 
+         return back()->with('status', 'Ordine rimborsato.');
+     }
++
++    public function storePartial(Order $order, Request $request, RefundService $refunds): RedirectResponse
++    {
++        $validated = $request->validate([
++            'amount' => ['required', 'integer', 'min:1'],
++            'reason' => ['required', 'string', 'max:1000'],
++        ]);
++
++        $refunds->refundPartially($order, $request->user(), $validated['amount'], $validated['reason']);
++
++        return back()->with('status', 'Ordine rimborsato parzialmente.');
++    }
+ }
+diff --git a/app/Models/Refund.php b/app/Models/Refund.php
+index 2c6cc87..87b9013 100644
+--- a/app/Models/Refund.php
++++ b/app/Models/Refund.php
+@@ -8,7 +8,7 @@
+ use Illuminate\Database\Eloquent\Model;
+ use Illuminate\Database\Eloquent\Relations\BelongsTo;
+ 
+-#[Fillable(['order_id', 'amount', 'gateway_refund_id', 'refunded_by'])]
++#[Fillable(['order_id', 'amount', 'reason', 'gateway_refund_id', 'refunded_by'])]
+ class Refund extends Model
+ {
+     /** @use HasFactory<RefundFactory> */
+diff --git a/app/Services/RefundService.php b/app/Services/RefundService.php
+index ee95322..f2f1bf2 100644
+--- a/app/Services/RefundService.php
++++ b/app/Services/RefundService.php
+@@ -17,6 +17,16 @@ final class RefundService
+     public function __construct(private PaymentGateway $gateway) {}
+ 
+     public function refundInFull(Order $order, User $actor): Refund
++    {
++        return $this->refund($order, $actor, $this->remainingAmount($order), null);
++    }
++
++    public function refundPartially(Order $order, User $actor, int $amount, string $reason): Refund
++    {
++        return $this->refund($order, $actor, $amount, $reason);
++    }
++
++    private function refund(Order $order, User $actor, int $amount, ?string $reason): Refund
+     {
+         if (! $actor->isStaff()) {
+             throw new AuthorizationException('Only staff can refund orders.');
+@@ -26,24 +36,49 @@ public function refundInFull(Order $order, User $actor): Refund
+             throw new DomainException('Order is not refundable.');
+         }
+ 
++        $remainingAmount = $this->remainingAmount($order);
++
++        if ($amount < 1 || $amount > $remainingAmount) {
++            throw new DomainException('Refund amount exceeds the remaining refundable amount.');
++        }
++
+         $result = $this->gateway->refund(
+             $order->gateway_charge_id,
+-            $order->amount,
+-            "refund-{$order->id}",
++            $amount,
++            $this->idempotencyKey($order),
+         );
+ 
+         $refund = $order->refunds()->create([
+-            'amount' => $order->amount / 100,
++            'amount' => $amount / 100,
++            'reason' => $reason,
+             'gateway_refund_id' => $result->id,
+             'refunded_by' => $actor->id,
+         ]);
+ 
+-        $order->update(['status' => OrderStatus::Refunded]);
++        if ($amount === $remainingAmount) {
++            $order->update(['status' => OrderStatus::Refunded]);
++        }
+ 
+         event(new OrderRefunded($order, $refund));
+ 
+-        Log::info('order refunded', ['order' => $order->id, 'by' => $actor->id]);
++        Log::info('order refunded', ['order' => $order->id, 'by' => $actor->id, 'amount' => $amount]);
+ 
+         return $refund;
+     }
++
++    private function remainingAmount(Order $order): int
++    {
++        $refunded = (int) round(((float) $order->refunds()->sum('amount')) * 100);
++
++        return $order->amount - $refunded;
++    }
++
++    private function idempotencyKey(Order $order): string
++    {
++        $refundCount = $order->refunds()->count();
++
++        return $refundCount === 0
++            ? "refund-{$order->id}"
++            : "refund-{$order->id}-".($refundCount + 1);
++    }
+ }
+diff --git a/database/migrations/2026_11_18_000000_allow_partial_order_refunds.php b/database/migrations/2026_11_18_000000_allow_partial_order_refunds.php
+new file mode 100644
+index 0000000..f9b2a6d
+--- /dev/null
++++ b/database/migrations/2026_11_18_000000_allow_partial_order_refunds.php
+@@ -0,0 +1,24 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++return new class extends Migration
++{
++    public function up(): void
++    {
++        Schema::table('refunds', function (Blueprint $table) {
++            $table->dropUnique(['order_id']);
++            $table->string('reason', 1000)->nullable()->after('amount');
++        });
++    }
++
++    public function down(): void
++    {
++        Schema::table('refunds', function (Blueprint $table) {
++            $table->dropColumn('reason');
++            $table->unique('order_id');
++        });
++    }
++};
+diff --git a/resources/views/admin/orders/show.blade.php b/resources/views/admin/orders/show.blade.php
+index 1d0799f..0f0c341 100644
+--- a/resources/views/admin/orders/show.blade.php
++++ b/resources/views/admin/orders/show.blade.php
+@@ -31,13 +31,14 @@
+             <h2>Rimborsi</h2>
+             <table>
+                 <thead>
+-                    <tr><th>Data</th><th>Importo</th><th>Operatore</th><th>Riferimento</th></tr>
++                    <tr><th>Data</th><th>Importo</th><th>Motivazione</th><th>Operatore</th><th>Riferimento</th></tr>
+                 </thead>
+                 <tbody>
+                     @foreach ($order->refunds as $refund)
+                         <tr>
+                             <td>{{ $refund->created_at->format('d/m/Y H:i') }}</td>
+                             <td>{{ Number::currency((float) $refund->amount, $order->currency, 'it') }}</td>
++                            <td>{{ $refund->reason ?? '—' }}</td>
+                             <td>{{ $refund->refundedBy->name }}</td>
+                             <td>{{ $refund->gateway_refund_id }}</td>
+                         </tr>
+diff --git a/routes/web.php b/routes/web.php
+index c76ee57..e7f32b3 100644
+--- a/routes/web.php
++++ b/routes/web.php
+@@ -14,5 +14,6 @@
+     Route::prefix('admin')->name('admin.')->group(function () {
+         Route::get('/orders/{order}', [Admin\OrderController::class, 'show'])->name('orders.show');
+         Route::post('/orders/{order}/refund', [Admin\OrderRefundController::class, 'store'])->name('orders.refund');
++        Route::post('/orders/{order}/refunds', [Admin\OrderRefundController::class, 'storePartial'])->name('orders.refunds.store');
+     });
+ });
+diff --git a/tests/Feature/Admin/OrderRefundControllerTest.php b/tests/Feature/Admin/OrderRefundControllerTest.php
+index 54c7b19..7b74dfc 100644
+--- a/tests/Feature/Admin/OrderRefundControllerTest.php
++++ b/tests/Feature/Admin/OrderRefundControllerTest.php
+@@ -19,6 +19,34 @@
+     $payments->assertRefunded($order->gateway_charge_id, 3200);
+ });
+ 
++it('partially refunds an order from the back office', function () {
++    $payments = $this->fakePayments();
++    $support = User::factory()->support()->create();
++    $order = Order::factory()->paid()->create(['amount' => 3200]);
++
++    $this->actingAs($support)
++        ->from("/admin/orders/{$order->id}")
++        ->post("/admin/orders/{$order->id}/refunds", ['amount' => 1200, 'reason' => 'Articolo danneggiato'])
++        ->assertRedirect("/admin/orders/{$order->id}")
++        ->assertSessionHas('status', 'Ordine rimborsato parzialmente.');
++
++    expect($order->fresh()->status)->toBe(OrderStatus::Paid)
++        ->and($order->refunds)->toHaveCount(1)
++        ->and($order->refunds->first()->amount)->toBe('12.00')
++        ->and($order->refunds->first()->reason)->toBe('Articolo danneggiato');
++    $payments->assertRefunded($order->gateway_charge_id, 1200);
++});
++
++it('validates the partial refund input', function () {
++    $order = Order::factory()->paid()->create(['amount' => 3200]);
++
++    $this->actingAs(User::factory()->support()->create())
++        ->from("/admin/orders/{$order->id}")
++        ->post("/admin/orders/{$order->id}/refunds", ['amount' => 0])
++        ->assertRedirect("/admin/orders/{$order->id}")
++        ->assertSessionHasErrors(['amount', 'reason']);
++});
++
+ it('shows the order to staff', function () {
+     $order = Order::factory()->paid()->create(['amount' => 1250]);
+ 
+diff --git a/tests/Feature/Payments/RefundServiceTest.php b/tests/Feature/Payments/RefundServiceTest.php
+index 6bc7e8e..71df40e 100644
+--- a/tests/Feature/Payments/RefundServiceTest.php
++++ b/tests/Feature/Payments/RefundServiceTest.php
+@@ -45,6 +45,44 @@
+         ->and($this->payments->refundsFor($order->gateway_charge_id))->toHaveCount(1);
+ });
+ 
++it('allows several partial refunds up to the order amount', function () {
++    $finance = User::factory()->finance()->create();
++    $order = Order::factory()->paid()->create(['amount' => 1990]);
++
++    app(RefundService::class)->refundPartially($order, $finance, 500, 'Sconto post-vendita');
++    app(RefundService::class)->refundPartially($order->fresh(), $finance, 1490, 'Ordine completato');
++
++    expect($order->fresh()->status)->toBe(OrderStatus::Refunded)
++        ->and($order->refunds)->toHaveCount(2);
++    $this->payments->assertRefunded($order->gateway_charge_id, 500);
++    $this->payments->assertRefunded($order->gateway_charge_id, 1490);
++});
++
++it('does not allow a partial refund to exceed the remaining amount', function () {
++    $finance = User::factory()->finance()->create();
++    $order = Order::factory()->paid()->create(['amount' => 1990]);
++
++    app(RefundService::class)->refundPartially($order, $finance, 500, 'Sconto post-vendita');
++
++    expect(fn () => app(RefundService::class)->refundPartially($order->fresh(), $finance, 1500, 'Troppo alto'))
++        ->toThrow(DomainException::class);
++
++    expect($order->refunds)->toHaveCount(1)
++        ->and($this->payments->refundsFor($order->gateway_charge_id))->toHaveCount(1);
++});
++
++it('refunds only the remainder when a full refund follows a partial one', function () {
++    $finance = User::factory()->finance()->create();
++    $order = Order::factory()->paid()->create(['amount' => 1990]);
++
++    app(RefundService::class)->refundPartially($order, $finance, 500, 'Sconto post-vendita');
++    app(RefundService::class)->refundInFull($order->fresh(), $finance);
++
++    expect($order->fresh()->status)->toBe(OrderStatus::Refunded)
++        ->and($order->refunds)->toHaveCount(2);
++    $this->payments->assertRefunded($order->gateway_charge_id, 1490);
++});
++
+ it('notifies the customer', function () {
+     Notification::fake();
+     $order = Order::factory()->paid()->create();
