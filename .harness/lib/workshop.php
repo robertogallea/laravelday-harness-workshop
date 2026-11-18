@@ -1006,6 +1006,29 @@ function summary_line(array $s): string
 // ---------------------------------------------------------------------------
 
 /**
+ * proc_open che su Windows regge anche i comandi .bat/.cmd (composer.bat, claude.cmd di npm…):
+ * con un array PHP chiama CreateProcess, che non applica PATHEXT. Se l'avvio diretto fallisce,
+ * riprova come stringa, che passa da cmd.exe e risolve l'estensione.
+ *
+ * @return resource|false
+ */
+function open_process(array|string $cmd, array $spec, ?array &$pipes, string $cwd, ?array $env)
+{
+    $p = @proc_open($cmd, $spec, $pipes, $cwd, $env);
+    if (! is_resource($p) && is_array($cmd) && PHP_OS_FAMILY === 'Windows') {
+        $line = implode(' ', array_map(
+            fn (string $a) => $a !== '' && strpbrk($a, " \t\"&|<>^()") === false
+                ? $a
+                : '"'.preg_replace('/(\\\\*)$/', '$1$1', preg_replace('/(\\\\*)"/', '$1$1\\"', $a)).'"',
+            $cmd,
+        ));
+        $p = @proc_open($line, $spec, $pipes, $cwd, $env);
+    }
+
+    return $p;
+}
+
+/**
  * Esegue un comando (array = senza shell, stringa = con la shell) con un timeout.
  *
  * @return array{exit: int, out: string, err: string, timed_out: bool}
@@ -1013,7 +1036,7 @@ function summary_line(array $s): string
 function run(array|string $cmd, string $cwd, int $timeout = 60, ?string $stdin = null, ?array $env = null): array
 {
     $spec = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-    $p = @proc_open($cmd, $spec, $pipes, $cwd, $env === null ? null : env_with($env));
+    $p = open_process($cmd, $spec, $pipes, $cwd, $env === null ? null : env_with($env));
     if (! is_resource($p)) {
         return ['exit' => 127, 'out' => '', 'err' => 'impossibile avviare: '.(is_array($cmd) ? implode(' ', $cmd) : $cmd), 'timed_out' => false];
     }
@@ -1083,7 +1106,7 @@ function stream_process(array $cmd, string $cwd, ?array $env, int $timeout, stri
     }
     $devnull = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
     $spec = [0 => ['file', $devnull, 'r'], 1 => ['pipe', 'w'], 2 => ['file', $stderrFile, 'w']];
-    $p = @proc_open($cmd, $spec, $pipes, $cwd, $env === null ? null : env_with($env));
+    $p = open_process($cmd, $spec, $pipes, $cwd, $env === null ? null : env_with($env));
     if (! is_resource($p)) {
         return ['exit' => 127, 'timed_out' => false, 'seconds' => 0.0];
     }

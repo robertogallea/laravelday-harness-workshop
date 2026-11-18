@@ -227,7 +227,7 @@ function fix_database(Ctx $c): void
 function mcp_starts(Ctx $c, array $server): W\Esito
 {
     $cmd = [$server['command'] ?? '', ...($server['args'] ?? [])];
-    $p = @proc_open($cmd, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $c->root);
+    $p = W\open_process($cmd, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $c->root, null);
     if (! is_resource($p)) {
         return $c->warn('non parte: '.implode(' ', $cmd));
     }
@@ -268,9 +268,17 @@ function claude_checks(): array
         },
         'Claude Code: trust della cartella' => function (Ctx $c) {
             $projects = json_decode((string) @file_get_contents(home().'/.claude.json'), true)['projects'] ?? [];
+            // Windows: percorsi case-insensitive, e Claude Code può salvare sia C:/… sia c:/… (CLI vs IDE)
+            $windows = PHP_OS_FAMILY === 'Windows';
+            $accepted = [];
+            foreach ($projects as $path => $project) {
+                $key = $windows ? strtolower($path) : $path;
+                $accepted[$key] = ($accepted[$key] ?? false) || ($project['hasTrustDialogAccepted'] ?? false) === true;
+            }
             $trusted = false;
             for ($dir = realpath($c->root); ! $trusted && $dir !== dirname($dir); $dir = dirname($dir)) {
-                $trusted = $projects[$dir]['hasTrustDialogAccepted'] ?? false; // vale anche il trust di una cartella madre
+                $dir = str_replace(DIRECTORY_SEPARATOR, '/', $dir);
+                $trusted = $accepted[$windows ? strtolower($dir) : $dir] ?? false; // vale anche il trust di una cartella madre
             }
 
             return $trusted ?: $c->warn('la cartella non risulta trusted', 'apri `claude` in questa cartella e accetta il trust');
